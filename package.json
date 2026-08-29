@@ -1,0 +1,17 @@
+{
+  "name": "sri-ambikas-runsheet",
+  "version": "1.0.0",
+  "description": "Standalone driver runsheet builder for Sri Ambikas Pte Ltd",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.2.0"
+  }
+}

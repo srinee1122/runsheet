@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sri Ambikas — Runsheet Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+
+<!-- Vue 3 + Vue Router 4, classic global builds via CDN. Vue core has no external
+     dependencies and could be loaded as an ES module on its own, but Vue Router's
+     "browser" ESM build unconditionally imports both "vue" and "@vue/devtools-api"
+     as bare specifiers internally — that needs an import map or a bundler to resolve,
+     neither of which fits a copy-and-run deploy. The classic/global builds sidestep
+     that entirely (no import statements inside them), so both load here as plain
+     scripts, before the module script below. -->
+<script src="https://unpkg.com/vue@3.4.31/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/vue-router@4.4.0/dist/vue-router.global.js"></script>
+<!-- SheetJS — parses .xlsx/.xls entirely in the browser so the real Item/Customer Master
+     files can be uploaded directly, no server-side conversion needed. -->
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- Every component we wrote ourselves is loaded as a real ES module via import/export,
+     starting from this one entry point. The browser resolves that whole dependency graph
+     itself (each module fetched once, executed in the right order), so there's no manual
+     <script> ordering to get wrong for our own code — only the two third-party libraries
+     above need the classic-script workaround. app.js reads them off window.Vue /
+     window.VueRouter, set by the scripts above. -->
+<script type="module" src="app.js"></script>
+</body>
+</html>
