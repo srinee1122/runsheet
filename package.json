@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "firebase-admin": "^14.3.0",
     "multer": "^2.2.0"
   }
 }

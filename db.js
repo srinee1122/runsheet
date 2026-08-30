@@ -48,6 +48,26 @@ CREATE TABLE IF NOT EXISTS runsheets (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   data TEXT NOT NULL -- JSON blob: { stops: [...], frequentColumns: [...] } snapshot at save time
 );
+
+-- Identity comes from Firebase (uid/email/display_name are just a local cache of what
+-- Firebase told us at last login); permissions are entirely local to this app, since
+-- Firebase only handles "who is this person", not "what can they do here". The very
+-- first person ever to log in is auto-promoted to admin with every module — see the
+-- bootstrap logic in server.js — so there's always a way in; everyone after that starts
+-- with no access until an admin grants it.
+CREATE TABLE IF NOT EXISTS users (
+  uid TEXT PRIMARY KEY,
+  email TEXT DEFAULT '',
+  display_name TEXT DEFAULT '',
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  module_builder INTEGER NOT NULL DEFAULT 0,
+  module_history INTEGER NOT NULL DEFAULT 0,
+  module_products INTEGER NOT NULL DEFAULT 0,
+  module_customers INTEGER NOT NULL DEFAULT 0,
+  module_settings INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_login_at TEXT DEFAULT ''
+);
 `);
 
 // ---- migrations: add Item Master / Customer Master reference columns to existing installs ----
@@ -119,4 +139,9 @@ function setSetting(key, value) {
   }
 }
 
-module.exports = { db, getSetting, setSetting };
+// The five sidebar pages that can be individually granted — kept in one place so the
+// server's user-permission validation and the seed/bootstrap logic below can't drift
+// from what the frontend actually gates.
+const MODULES = ['builder', 'history', 'products', 'customers', 'settings'];
+
+module.exports = { db, getSetting, setSetting, MODULES };

@@ -1,7 +1,11 @@
 // lib/api.js — thin fetch wrapper used by every component.
+import { getIdToken } from './firebase.js';
+
 export const Api = (() => {
   async function req(method, url, body) {
     const opts = { method, headers: {} };
+    const token = await getIdToken();
+    if (token) opts.headers['Authorization'] = `Bearer ${token}`;
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -47,8 +51,5 @@ export function parseSpreadsheetFile(file) {
   });
 }
 
-// Current clerk name — persisted in localStorage so the browser "remembers" who's using it.
-export const CurrentUser = {
-  get() { return localStorage.getItem('runsheet_user') || ''; },
-  set(name) { localStorage.setItem('runsheet_user', name || ''); },
-};
+// (The old CurrentUser name-picker is gone — created_by now comes from the
+// authenticated Firebase user's real email/display name, via /api/me.)

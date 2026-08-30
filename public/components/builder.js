@@ -1,5 +1,5 @@
 // components/builder.js
-import { Api, CurrentUser } from '../lib/api.js';
+import { Api } from '../lib/api.js';
 import { round2 } from '../lib/round2.js';
 import RoundItemPicker from './round-item-picker.js';
 import PhotoReviewPanel from './photo-review.js';
@@ -296,7 +296,6 @@ export default {
       this.saving = true; this.saveMsg = '';
       const payload = {
         ...this.header,
-        created_by: CurrentUser.get(),
         data: { stops: this.cleanStops(), frequentColumns: this.frequentColumns },
         version: this.version,
       };
@@ -360,7 +359,6 @@ export default {
       this.autoSaving = true;
       const payload = {
         ...this.header,
-        created_by: CurrentUser.get(),
         data: { stops: this.cleanStops(), frequentColumns: this.frequentColumns },
         version: this.version,
       };

@@ -4,6 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const { db, getSetting, setSetting } = require('./db');
 const { EXTRACTION_SYSTEM_PROMPT } = require('./extraction-prompt');
+const { requireAuth, requireModule, requireAnyModule, requireAdmin, getUser, userPermissions, MODULES } = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 4500;
@@ -11,6 +12,43 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Every /api/* route requires a valid Firebase ID token from here on — the login page
+// and the rest of the static frontend stay reachable without one, since you need to be
+// able to load the page to sign in at all. Per-route module checks are added below.
+app.use('/api', requireAuth);
+
+// ---- current-user profile & admin user management ----
+app.get('/api/me', (req, res) => {
+  res.json({ uid: req.user.uid, email: req.user.email, displayName: req.user.display_name, ...req.permissions });
+});
+
+app.get('/api/users', requireAdmin, (req, res) => {
+  const rows = db.prepare('SELECT * FROM users ORDER BY email').all();
+  res.json(rows.map(r => ({
+    uid: r.uid, email: r.email, displayName: r.display_name, isAdmin: !!r.is_admin,
+    modules: Object.fromEntries(MODULES.map(m => [m, !!r[`module_${m}`]])),
+    lastLoginAt: r.last_login_at,
+  })));
+});
+
+app.put('/api/users/:uid', requireAdmin, (req, res) => {
+  const { uid } = req.params;
+  const target = getUser(uid);
+  if (!target) return res.status(404).json({ error: 'No such user.' });
+  const isAdmin = !!req.body.isAdmin;
+  // Guard against locking everyone out: never let the last remaining admin be demoted.
+  if (target.is_admin && !isAdmin) {
+    const otherAdmins = db.prepare('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND uid != ?').get(uid).n;
+    if (otherAdmins === 0) return res.status(400).json({ error: "Can't remove the last admin." });
+  }
+  const modules = req.body.modules || {};
+  const setCols = ['is_admin=?', ...MODULES.map(m => `module_${m}=?`)];
+  const vals = [isAdmin ? 1 : 0, ...MODULES.map(m => (modules[m] ? 1 : 0))];
+  db.prepare(`UPDATE users SET ${setCols.join(',')} WHERE uid=?`).run(...vals, uid);
+  res.json({ ok: true });
+});
+
 
 // ---------------------------------------------------------------------------
 // tiny CSV parser (handles quoted fields with commas) — no dependency needed
@@ -118,7 +156,7 @@ function normEntryUnit(v) { return /^p/i.test(String(v ?? '').trim()) ? 'PCS' : 
 // Category, Sub-category, Sub-category 2, Base unit, Group, Item type,
 // Qty/Ctn, Selling rate), plus the app's own is_round_item flag.
 // =====================================================================
-app.get('/api/products', (req, res) => {
+app.get('/api/products', requireAnyModule('builder', 'products'), (req, res) => {
   const rows = db.prepare('SELECT * FROM products ORDER BY name COLLATE NOCASE').all();
   res.json(rows.map(r => ({ ...r, is_round_item: !!r.is_round_item })));
 });
@@ -133,7 +171,7 @@ function productParams(body) {
   ];
 }
 
-app.post('/api/products', (req, res) => {
+app.post('/api/products', requireModule('products'), (req, res) => {
   if (!req.body.name || !req.body.name.trim()) return res.status(400).json({ error: 'name required' });
   try {
     const info = db.prepare(`
@@ -146,7 +184,7 @@ app.post('/api/products', (req, res) => {
   }
 });
 
-app.put('/api/products/:id', (req, res) => {
+app.put('/api/products/:id', requireModule('products'), (req, res) => {
   try {
     db.prepare(`
       UPDATE products SET name=?, qty_per_ctn=?, is_round_item=?, code=?, supplier=?, brand=?, category=?,
@@ -158,7 +196,7 @@ app.put('/api/products/:id', (req, res) => {
   }
 });
 
-app.delete('/api/products/:id', (req, res) => {
+app.delete('/api/products/:id', requireModule('products'), (req, res) => {
   db.prepare('DELETE FROM products WHERE id=?').run(req.params.id);
   res.json({ ok: true });
 });
@@ -167,7 +205,7 @@ app.delete('/api/products/:id', (req, res) => {
 // Re-importing a name that already exists updates its reference data but deliberately leaves
 // is_round_item, packing_type, and entry_unit untouched, so re-running an Item Master import
 // never wipes flags or classifications assigned inside this app.
-app.post('/api/products/import', (req, res) => {
+app.post('/api/products/import', requireModule('products'), (req, res) => {
   const { csv, rows } = req.body;
   let rawRecords;
   if (Array.isArray(rows)) rawRecords = rows;
@@ -202,7 +240,7 @@ app.post('/api/products/import', (req, res) => {
 // CUSTOMERS — mirrors the Customer Master columns (Name, Code, Segment,
 // Area, Contact, Chain store, Address, Postal code, Mobile, WhatsApp, ROC no).
 // =====================================================================
-app.get('/api/customers', (req, res) => {
+app.get('/api/customers', requireAnyModule('builder', 'customers'), (req, res) => {
   res.json(db.prepare('SELECT * FROM customers ORDER BY name COLLATE NOCASE').all());
 });
 
@@ -214,7 +252,7 @@ function customerParams(body) {
   ];
 }
 
-app.post('/api/customers', (req, res) => {
+app.post('/api/customers', requireModule('customers'), (req, res) => {
   if (!req.body.name || !req.body.name.trim()) return res.status(400).json({ error: 'name required' });
   try {
     const info = db.prepare(`
@@ -227,7 +265,7 @@ app.post('/api/customers', (req, res) => {
   }
 });
 
-app.put('/api/customers/:id', (req, res) => {
+app.put('/api/customers/:id', requireModule('customers'), (req, res) => {
   db.prepare(`
     UPDATE customers SET name=?, area=?, code=?, segment=?, contact=?, chain_store=?, address=?,
       postal_code=?, mobile=?, whatsapp=?, roc_no=?, modified_source=? WHERE id=?
@@ -235,12 +273,12 @@ app.put('/api/customers/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/customers/:id', (req, res) => {
+app.delete('/api/customers/:id', requireModule('customers'), (req, res) => {
   db.prepare('DELETE FROM customers WHERE id=?').run(req.params.id);
   res.json({ ok: true });
 });
 
-app.post('/api/customers/import', (req, res) => {
+app.post('/api/customers/import', requireModule('customers'), (req, res) => {
   const { csv, rows } = req.body;
   let rawRecords;
   if (Array.isArray(rows)) rawRecords = rows;
@@ -272,22 +310,22 @@ app.post('/api/customers/import', (req, res) => {
 // =====================================================================
 // SETTINGS — frequent round-item columns (max 10), clerk name list
 // =====================================================================
-app.get('/api/settings/frequent-columns', (req, res) => {
+app.get('/api/settings/frequent-columns', requireAnyModule('builder', 'settings'), (req, res) => {
   res.json(getSetting('frequent_columns', []));
 });
 
-app.put('/api/settings/frequent-columns', (req, res) => {
+app.put('/api/settings/frequent-columns', requireModule('settings'), (req, res) => {
   const cols = Array.isArray(req.body.columns) ? req.body.columns : [];
   if (cols.length > 10) return res.status(400).json({ error: 'max 10 frequent columns' });
   setSetting('frequent_columns', cols);
   res.json({ ok: true });
 });
 
-app.get('/api/settings/clerks', (req, res) => {
+app.get('/api/settings/clerks', requireAnyModule('builder', 'settings'), (req, res) => {
   res.json(getSetting('clerks', []));
 });
 
-app.put('/api/settings/clerks', (req, res) => {
+app.put('/api/settings/clerks', requireModule('settings'), (req, res) => {
   const names = Array.isArray(req.body.names) ? [...new Set(req.body.names.map(n => String(n).trim()).filter(Boolean))] : [];
   setSetting('clerks', names);
   res.json({ ok: true });
@@ -296,14 +334,14 @@ app.put('/api/settings/clerks', (req, res) => {
 // =====================================================================
 // RUNSHEETS (history + save/reopen)
 // =====================================================================
-app.get('/api/runsheets', (req, res) => {
+app.get('/api/runsheets', requireAnyModule('builder', 'history'), (req, res) => {
   const rows = db.prepare(
     'SELECT id, sheet_no, area, delivery_man, vehicle_no, run_date, delivery_date, created_by, created_at, updated_at FROM runsheets ORDER BY id DESC'
   ).all();
   res.json(rows);
 });
 
-app.get('/api/runsheets/:id', (req, res) => {
+app.get('/api/runsheets/:id', requireAnyModule('builder', 'history'), (req, res) => {
   const row = db.prepare('SELECT * FROM runsheets WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ ...row, data: JSON.parse(row.data) });
@@ -315,21 +353,24 @@ function validateRunsheetPayload(body) {
   return null;
 }
 
-app.post('/api/runsheets', (req, res) => {
+app.post('/api/runsheets', requireModule('builder'), (req, res) => {
   const b = req.body;
   const err = validateRunsheetPayload(b);
   if (err) return res.status(400).json({ error: err });
+  // created_by comes from the verified token, not whatever the client sends — a person
+  // can't misattribute a sheet to someone else this way.
+  const createdBy = req.user.display_name || req.user.email || '';
   const info = db.prepare(`
     INSERT INTO runsheets (sheet_no, area, delivery_man, vehicle_no, run_date, delivery_date, created_by, data, version)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-  `).run(txt(b.sheet_no), txt(b.area), txt(b.delivery_man), txt(b.vehicle_no), txt(b.run_date), txt(b.delivery_date), txt(b.created_by), JSON.stringify(b.data || {}));
+  `).run(txt(b.sheet_no), txt(b.area), txt(b.delivery_man), txt(b.vehicle_no), txt(b.run_date), txt(b.delivery_date), createdBy, JSON.stringify(b.data || {}));
   res.json({ id: Number(info.lastInsertRowid), version: 1 });
 });
 
 // Optimistic concurrency: the client sends the version it loaded. If the row's current
 // version has since moved on (someone else saved in between), reject with 409 rather than
 // silently overwriting their save — no lock to go stale, just a conflict caught at save time.
-app.put('/api/runsheets/:id', (req, res) => {
+app.put('/api/runsheets/:id', requireModule('builder'), (req, res) => {
   const b = req.body;
   const err = validateRunsheetPayload(b);
   if (err) return res.status(400).json({ error: err });
@@ -353,7 +394,7 @@ app.put('/api/runsheets/:id', (req, res) => {
 // =====================================================================
 // PHOTO EXTRACTION — calls the Anthropic API with the tuned system prompt (verbatim)
 // =====================================================================
-app.post('/api/extract-photo', upload.single('photo'), async (req, res) => {
+app.post('/api/extract-photo', requireModule('builder'), upload.single('photo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'no photo uploaded' });
     const apiKey = process.env.ANTHROPIC_API_KEY;

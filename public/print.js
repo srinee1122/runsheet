@@ -3,23 +3,42 @@
 // The render() function itself, and the math inside it, are kept verbatim from the
 // supplied template — only how DATA gets built (fetched live instead of injected at
 // build time) is different.
+//
+// This page opens in its own browser tab (via window.open from the builder), completely
+// separate from the main Vue app — so unlike every other page, which gets its auth token
+// attached automatically by lib/api.js, this one has to fetch its own token directly.
+import { getIdToken } from './lib/firebase.js';
+import { round2 } from './lib/round2.js';
+
 (function () {
   const params = new URLSearchParams(location.search);
   const id = params.get('id');
   const SIGN_ROLES = ["Prepared By", "Arranged By", "Bill Counter Checked By", "Puller",
     "Round Item Checked By", "Loaded By", "Taken Over From Driver", "Hand Over By Admin", "Taken Over By Admin"];
 
-  const ctnOf = (pcs, qty) => qty <= 1 ? pcs : Math.ceil(pcs / qty);
-  const cell = (v, cls = "") => `<td class="num ${v === 0 ? 'zero' : ''} ${cls}">${v === 0 ? '·' : v}</td>`;
+  // No ceiling — matches the Matrix Builder exactly, which shows the raw decimal on
+  // purpose (a fractional cartons figure is usually a sign of a wrong entry, and
+  // rounding it away here would hide that on the one document a driver actually acts
+  // on, which is worse than hiding it during entry). round2() at cell() below is
+  // display-only cleanup for float precision, not a rounding rule.
+  const ctnOf = (pcs, qty) => qty <= 1 ? pcs : pcs / qty;
+  const cell = (v, cls = "") => { const rv = round2(v); return `<td class="num ${rv === 0 ? 'zero' : ''} ${cls}">${rv === 0 ? '·' : rv}</td>`; };
 
   async function main() {
     if (!id) { document.body.insertAdjacentHTML('afterbegin', '<div style="color:#fff;padding:16px;">Missing ?id= in the URL.</div>'); return; }
     let rs, products;
     try {
-      const [rsRes, prodRes] = await Promise.all([fetch(`/api/runsheets/${id}`), fetch('/api/products')]);
+      const token = await getIdToken();
+      if (!token) throw new Error('Not signed in — open this from the Runsheet Builder while signed in.');
+      const authHeader = { Authorization: `Bearer ${token}` };
+      const [rsRes, prodRes] = await Promise.all([
+        fetch(`/api/runsheets/${id}`, { headers: authHeader }),
+        fetch('/api/products', { headers: authHeader }),
+      ]);
       rs = await rsRes.json();
-      products = await prodRes.json();
       if (!rsRes.ok) throw new Error(rs.error || 'failed to load runsheet');
+      products = await prodRes.json();
+      if (!prodRes.ok) throw new Error((products && products.error) || 'failed to load products');
     } catch (e) {
       document.body.insertAdjacentHTML('afterbegin', `<div style="color:#fff;padding:16px;">Failed to load: ${e.message}</div>`);
       return;
@@ -41,13 +60,17 @@
     });
     const columnProductIds = new Set(cols.map(c => c._pid));
 
-    // pieces for one product on one stop, from our stored round_items (qty in cartons)
+    // pieces for one product on one stop, from our stored round_items (qty in cartons).
+    // Kept as the exact decimal, not rounded — that's what makes the cartons figure
+    // downstream (pieces ÷ qty/ctn) come out mathematically identical to the Builder's
+    // own raw qty_ctn sum, rather than drifting from a round-trip through a rounded
+    // intermediate value.
     function piecesFor(stop, productId, qtyPerCtn) {
       let pcs = 0;
       for (const ri of stop.round_items || []) {
         if (ri.product_id === productId) pcs += (Number(ri.qty_ctn) || 0) * (qtyPerCtn || 1);
       }
-      return Math.round(pcs);
+      return pcs;
     }
 
     // manual box-total CTNS, split by packing type; falls back to the pre-split `ctns`
@@ -165,7 +188,7 @@
         <td class="txt">${r.cust}</td><td class="by">${r.by}</td>
         <td class="num"></td><td class="num"></td>`;
       r.pcs.forEach(p => h += cell(p));
-      h += cell(otherC) + cell(riC) + `<td class="tot-col">${total}</td></tr>`;
+      h += cell(otherC) + cell(riC) + `<td class="tot-col">${round2(total)}</td></tr>`;
     });
 
     const otherT = ROWS.reduce((s, r) => s + (Number(r.ctn != null ? r.ctn : r.other) || 0), 0);
@@ -174,11 +197,11 @@
     h += `<tfoot>
       <tr><td colspan="5" class="lbl">TOTAL ROUND — PIECES</td>
           <td></td><td></td>
-          ${colPcs.map(p => `<td>${p}</td>`).join("")}
-          <td>${otherT}</td><td>${riT}</td><td class="tot-col">${sheetTotal}</td></tr>
+          ${colPcs.map(p => `<td>${round2(p)}</td>`).join("")}
+          <td>${round2(otherT)}</td><td>${round2(riT)}</td><td class="tot-col">${round2(sheetTotal)}</td></tr>
       <tr class="ctn-row"><td colspan="7" class="lbl">CONVERTED — CARTONS / BAGS &nbsp;(pcs ÷ qty/ctn)</td>
-          ${colPcs.map((p, j) => `<td>${ctnOf(p, COLS[j].qty)}</td>`).join("")}
-          <td>${otherT}</td><td>${riT}</td><td class="tot-col">${sheetTotal}</td></tr>
+          ${colPcs.map((p, j) => `<td>${round2(ctnOf(p, COLS[j].qty))}</td>`).join("")}
+          <td>${round2(otherT)}</td><td>${round2(riT)}</td><td class="tot-col">${round2(sheetTotal)}</td></tr>
     </tfoot>`;
     document.getElementById("mainTable").innerHTML = h;
     document.getElementById("cashTot").innerHTML = "$ ____________";
@@ -195,12 +218,12 @@
       const rowCtn = ctnOf(rowPcs, p.qty);
       arPcsT += rowPcs; arCtnRowT += rowCtn;
       a += `<tr><td class="txt">${p.name}</td>`;
-      ROWS.forEach((_, i) => { const v = p.byInv[i] || 0; a += `<td class="${v === 0 ? 'zero' : ''}">${v === 0 ? '·' : v}</td>`; });
-      a += `<td class="rt">${rowPcs}</td><td>${p.qty}</td><td class="rt">${rowCtn}</td></tr>`;
+      ROWS.forEach((_, i) => { const v = round2(p.byInv[i] || 0); a += `<td class="${v === 0 ? 'zero' : ''}">${v === 0 ? '·' : v}</td>`; });
+      a += `<td class="rt">${round2(rowPcs)}</td><td>${p.qty}</td><td class="rt">${round2(rowCtn)}</td></tr>`;
     });
     a += `</tbody><tfoot><tr><td class="lbl">Pieces per shop (driver drops)</td>`;
-    ROWS.forEach((_, i) => a += `<td>${arPcsByInv[i] || "·"}</td>`);
-    a += `<td>${arPcsT}</td><td></td><td>${arCtnRowT}</td></tr></tfoot>`;
+    ROWS.forEach((_, i) => a += `<td>${round2(arPcsByInv[i]) || "·"}</td>`);
+    a += `<td>${round2(arPcsT)}</td><td></td><td>${round2(arCtnRowT)}</td></tr></tfoot>`;
     document.getElementById("allRound").innerHTML = a;
 
     /* ---- signatures ---- */
@@ -211,14 +234,14 @@
     const grand = otherT + grandRoundCtn + arCtnRowT;
     const pk = DATA.packing || { cartons: 0, bags: 0, ctnsCartons: 0, ctnsBags: 0 };
     document.getElementById("grandBox").innerHTML = `
-      <tr><td class="lbl">CTNS (manual) — Carton</td><td class="val">${pk.ctnsCartons || 0}</td></tr>
-      <tr><td class="lbl">CTNS (manual) — Bag</td><td class="val">${pk.ctnsBags || 0}</td></tr>
-      <tr><td class="lbl">Round items — columns</td><td class="val">${grandRoundCtn}</td></tr>
-      <tr><td class="lbl">Round items — matrix</td><td class="val">${arCtnRowT}</td></tr>
-      <tr><td class="lbl">Round items — packed as Carton</td><td class="val">${pk.cartons}</td></tr>
-      <tr><td class="lbl">Round items — packed as Bag</td><td class="val">${pk.bags}</td></tr>
+      <tr><td class="lbl">CTNS (manual) — Carton</td><td class="val">${round2(pk.ctnsCartons) || 0}</td></tr>
+      <tr><td class="lbl">CTNS (manual) — Bag</td><td class="val">${round2(pk.ctnsBags) || 0}</td></tr>
+      <tr><td class="lbl">Round items — columns</td><td class="val">${round2(grandRoundCtn)}</td></tr>
+      <tr><td class="lbl">Round items — matrix</td><td class="val">${round2(arCtnRowT)}</td></tr>
+      <tr><td class="lbl">Round items — packed as Carton</td><td class="val">${round2(pk.cartons)}</td></tr>
+      <tr><td class="lbl">Round items — packed as Bag</td><td class="val">${round2(pk.bags)}</td></tr>
       <tr><td class="lbl">Invoices on run</td><td class="val">${ROWS.length}</td></tr>
-      <tr class="final"><td class="lbl">TOTAL PACKAGES LOADED</td><td class="val">${grand}</td></tr>`;
+      <tr class="final"><td class="lbl">TOTAL PACKAGES LOADED</td><td class="val">${round2(grand)}</td></tr>`;
   }
 
   /* scale sheet to fit narrow screens */
