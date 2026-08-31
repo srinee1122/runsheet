@@ -42,17 +42,34 @@ function getUser(uid) {
 // Called once per verified request. Creates the local row on a person's very first
 // login; the first row ever created becomes admin with every module (otherwise nobody
 // could ever grant the first person access) — everyone after that starts at zero access.
+//
+// BOOTSTRAP_ADMIN_EMAIL (optional env var) is a second, independent way to designate an
+// admin — whoever signs in with that exact email gets promoted on their very next login,
+// whether or not they were first. This exists for recovering access on a host where the
+// first-sign-in bootstrap landed on the wrong account and there's no server shell access
+// to fix it by hand (e.g. a platform's shell/SSH feature sitting behind a paid tier) —
+// setting one environment variable and redeploying is enough to fix it instead.
 function upsertUser(uid, email, displayName) {
+  const bootstrapEmail = (process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+  const isBootstrapAdmin = bootstrapEmail && (email || '').trim().toLowerCase() === bootstrapEmail;
+
   const existing = getUser(uid);
   const now = new Date().toISOString();
   if (existing) {
-    db.prepare('UPDATE users SET email=?, display_name=?, last_login_at=? WHERE uid=?')
-      .run(email || existing.email, displayName || existing.display_name, now, uid);
+    if (isBootstrapAdmin && !existing.is_admin) {
+      const cols = ['email=?', 'display_name=?', 'last_login_at=?', 'is_admin=1', ...MODULES.map(m => `module_${m}=1`)];
+      db.prepare(`UPDATE users SET ${cols.join(',')} WHERE uid=?`)
+        .run(email || existing.email, displayName || existing.display_name, now, uid);
+    } else {
+      db.prepare('UPDATE users SET email=?, display_name=?, last_login_at=? WHERE uid=?')
+        .run(email || existing.email, displayName || existing.display_name, now, uid);
+    }
     return getUser(uid);
   }
   const isFirstUser = db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0;
+  const makeAdmin = isFirstUser || isBootstrapAdmin;
   const cols = ['uid', 'email', 'display_name', 'is_admin', 'last_login_at', ...MODULES.map(m => `module_${m}`)];
-  const vals = [uid, email || '', displayName || '', isFirstUser ? 1 : 0, now, ...MODULES.map(() => (isFirstUser ? 1 : 0))];
+  const vals = [uid, email || '', displayName || '', makeAdmin ? 1 : 0, now, ...MODULES.map(() => (makeAdmin ? 1 : 0))];
   db.prepare(`INSERT INTO users (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
   return getUser(uid);
 }
