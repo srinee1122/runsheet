@@ -1,4 +1,5 @@
 import { Api } from '../lib/api.js';
+import { formatDateTime } from '../lib/formatDate.js';
 
 export default {
   data() { return { runsheets: [], search: '', currentPage: 1, pageSize: 15 }; },
@@ -29,6 +30,7 @@ export default {
   },
   async mounted() { this.runsheets = await Api.get('/api/runsheets'); },
   methods: {
+    formatDateTime,
     open(r) { this.$router.push(`/builder/${r.id}`); },
     print(r) { window.open(`/print.html?id=${r.id}`, '_blank'); },
     goToPage(p) { this.currentPage = Math.min(Math.max(1, p), this.totalPages); },
@@ -52,7 +54,7 @@ export default {
           <td>{{ r.vehicle_no || '—' }}</td>
           <td>{{ r.run_date || '—' }}</td>
           <td>{{ r.created_by || '—' }}</td>
-          <td class="hint">{{ r.updated_at }}</td>
+          <td class="hint">{{ formatDateTime(r.updated_at) }}</td>
           <td class="right">
             <button class="small" @click="open(r)">Reopen</button>
             <button class="small" @click="print(r)">Print</button>

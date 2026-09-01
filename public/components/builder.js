@@ -1,6 +1,7 @@
 // components/builder.js
 import { Api } from '../lib/api.js';
 import { round2 } from '../lib/round2.js';
+import { formatDateTime } from '../lib/formatDate.js';
 import PhotoReviewPanel from './photo-review.js';
 import MatrixView from './matrix-view.js';
 
@@ -214,6 +215,7 @@ export default {
       this.autoSaveConflict = false;
     },
     round2, // exposed to template
+    formatDateTime, // exposed to template
     productOf(id) { return this.products.find(p => p.id === id); },
     // Kept as the exact decimal sum, not rounded up — a fractional RI is usually a sign
     // of a wrong entry somewhere, and rounding it away would hide exactly the thing a
@@ -465,7 +467,7 @@ export default {
   </div>
 
   <div class="warn-banner" v-if="viewingVersion">
-    Reviewing version {{ viewingVersion.version }}, saved by {{ viewingVersion.saved_by || 'someone' }} at {{ viewingVersion.saved_at }}
+    Reviewing version {{ viewingVersion.version }}, saved by {{ viewingVersion.saved_by || 'someone' }} at {{ formatDateTime(viewingVersion.saved_at) }}
     — this isn't the current saved sheet yet. Click Save to restore it, or Version History to pick a different one.
   </div>
 
@@ -481,7 +483,7 @@ export default {
           <tr v-for="v in versions" :key="v.id">
             <td>{{ v.version }}</td>
             <td>{{ v.saved_by || '—' }}</td>
-            <td class="hint">{{ v.saved_at }}</td>
+            <td class="hint">{{ formatDateTime(v.saved_at) }}</td>
             <td><button class="small" @click="loadVersionForReview(v)">Load</button></td>
           </tr>
         </tbody>
