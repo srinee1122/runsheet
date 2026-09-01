@@ -21,15 +21,27 @@ const { createRouter, createWebHashHistory } = window.VueRouter;
 // nothing about permissions should be trusted before that. `generation` increments on
 // every completed resolution (not just the first) — see the watcher below for why that
 // matters.
-const authState = reactive({ ready: false, user: null, permissions: null, generation: 0 });
+const authState = reactive({ ready: false, user: null, permissions: null, permissionsError: null, generation: 0 });
 
 onAuthChange(async (fbUser) => {
   authState.user = fbUser;
   if (fbUser) {
-    try { authState.permissions = await Api.get('/api/me'); }
-    catch { authState.permissions = null; }
+    try {
+      authState.permissions = await Api.get('/api/me');
+      authState.permissionsError = null;
+    } catch (e) {
+      // Distinct from genuinely having zero permissions — this means the server itself
+      // couldn't verify who's asking (usually a missing/misconfigured Firebase service
+      // account credential), which looks identical from a route-guard's point of view
+      // (both leave permissions unusable) but is a completely different problem with a
+      // completely different fix. Surfaced separately on /no-access below so it's
+      // visible on-screen instead of only in server logs.
+      authState.permissions = null;
+      authState.permissionsError = e.message || 'Could not verify your account.';
+    }
   } else {
     authState.permissions = null;
+    authState.permissionsError = null;
   }
   authState.ready = true;
   authState.generation++;
@@ -56,8 +68,18 @@ function fallbackRoute() {
 const routes = [
   { path: '/', redirect: '/builder' },
   { path: '/login', component: LoginPage, meta: { public: true } },
-  { path: '/no-access', component: { template: `
-      <div class="panel">
+  { path: '/no-access', component: {
+      setup() { return { auth: authState }; },
+      template: `
+      <div class="panel" v-if="auth.permissionsError">
+        <h1>Couldn't verify your account</h1>
+        <p class="hint">This isn't a permissions problem — the server itself couldn't confirm
+        who you are. That usually means its Firebase credentials aren't set up correctly.
+        The exact error was:</p>
+        <p class="limit-banner">{{ auth.permissionsError }}</p>
+        <p class="hint">If you're not the one managing this deployment, let them know.</p>
+      </div>
+      <div class="panel" v-else>
         <h1>No access yet</h1>
         <p class="hint">You're signed in, but no one's granted your account access to any page
         yet. Ask an admin to set your permissions in Users &amp; Permissions.</p>
