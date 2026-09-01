@@ -6,12 +6,18 @@ const { db, MODULES } = require('./db.js');
 
 // ---- Firebase Admin initialization ----
 // The service account key is a secret and must never be committed to the repo or
-// pasted into chat. Provide it one of two ways:
+// pasted into chat. Provide it any of three ways:
 //   1. Set GOOGLE_APPLICATION_CREDENTIALS to the path of the downloaded JSON key file
 //      (Firebase Console → Project settings → Service accounts → Generate new private key).
 //   2. Or set FIREBASE_SERVICE_ACCOUNT_JSON to the full JSON contents directly, for
 //      platforms where writing a file isn't convenient (e.g. some hosting dashboards
 //      that only offer environment-variable text boxes).
+//   3. Or set FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 to that same JSON, base64-encoded, as
+//      a more robust alternative to #2 — some platforms' secret-storage text boxes don't
+//      reliably preserve raw JSON's curly braces, quotes, or the embedded newlines inside
+//      the private_key field; base64 reduces the whole thing to plain alphanumeric
+//      characters with no such risk. To produce one:
+//      node -e "console.log(require('fs').readFileSync('servicekey.json').toString('base64'))"
 let auth; // the Auth service instance, once initialized
 let firebaseReady = false;
 
@@ -19,24 +25,42 @@ let firebaseReady = false;
 // parses. Prints once at startup so it's visible in whatever platform's log viewer without
 // needing to reproduce the failure first.
 const rawEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-if (rawEnv) {
-  console.log(`[auth] FIREBASE_SERVICE_ACCOUNT_JSON is present, length ${rawEnv.length} characters.`);
+const rawEnvB64 = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64;
+function diagnoseCredentialString(label, jsonStr) {
+  console.log(`[auth] ${label} is present, length ${jsonStr.length} characters.`);
   try {
-    const parsed = JSON.parse(rawEnv);
+    const parsed = JSON.parse(jsonStr);
     console.log(`[auth] It parses as valid JSON. project_id: ${parsed.project_id || '(missing!)'}, has private_key: ${!!parsed.private_key}, has client_email: ${!!parsed.client_email}.`);
   } catch (parseErr) {
     console.log(`[auth] It is present but does NOT parse as valid JSON: ${parseErr.message}`);
   }
+}
+if (rawEnv) {
+  diagnoseCredentialString('FIREBASE_SERVICE_ACCOUNT_JSON', rawEnv);
 } else {
   console.log('[auth] FIREBASE_SERVICE_ACCOUNT_JSON is not set (process.env has no value for it at all).');
+}
+if (rawEnvB64) {
+  try {
+    diagnoseCredentialString('FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 (decoded)', Buffer.from(rawEnvB64, 'base64').toString('utf8'));
+  } catch (decodeErr) {
+    console.log(`[auth] FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is present but failed to decode: ${decodeErr.message}`);
+  }
+} else {
+  console.log('[auth] FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is not set.');
 }
 
 try {
   const { initializeApp, applicationDefault, cert } = require('firebase-admin/app');
   const { getAuth } = require('firebase-admin/auth');
-  const credential = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-    ? cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON))
-    : applicationDefault();
+  let credential;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64) {
+    credential = cert(JSON.parse(Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64, 'base64').toString('utf8')));
+  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    credential = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
+  } else {
+    credential = applicationDefault();
+  }
   const app = initializeApp({ credential });
   auth = getAuth(app);
   firebaseReady = true;
@@ -46,7 +70,7 @@ try {
   // what's missing, rather than the whole server refusing to boot over an auth config
   // issue during initial setup.
   console.error('Firebase Admin did not initialize:', e.message);
-  console.error('Set GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT_JSON before logins will work.');
+  console.error('Set GOOGLE_APPLICATION_CREDENTIALS, FIREBASE_SERVICE_ACCOUNT_JSON, or FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 before logins will work.');
 }
 
 // ---- local user lookup / bootstrap ----

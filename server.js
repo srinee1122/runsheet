@@ -10,6 +10,15 @@ const app = express();
 const PORT = process.env.PORT || 4500;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
+// One-time diagnostic covering every secret this app reads from the environment — prints
+// once at startup so a single deploy shows whether a platform's secrets feature is
+// reaching the process at all, or only failing for one specific value (auth.js logs its
+// own more detailed line for FIREBASE_SERVICE_ACCOUNT_JSON specifically; this is the
+// short version covering all three side by side).
+console.log('[env check] ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? `present (${process.env.ANTHROPIC_API_KEY.length} chars)` : 'NOT SET');
+console.log('[env check] BOOTSTRAP_ADMIN_EMAIL:', process.env.BOOTSTRAP_ADMIN_EMAIL ? `present: ${process.env.BOOTSTRAP_ADMIN_EMAIL}` : 'NOT SET');
+console.log('[env check] FIREBASE_SERVICE_ACCOUNT_JSON:', process.env.FIREBASE_SERVICE_ACCOUNT_JSON ? `present (${process.env.FIREBASE_SERVICE_ACCOUNT_JSON.length} chars)` : 'NOT SET');
+
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
