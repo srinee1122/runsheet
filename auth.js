@@ -14,6 +14,23 @@ const { db, MODULES } = require('./db.js');
 //      that only offer environment-variable text boxes).
 let auth; // the Auth service instance, once initialized
 let firebaseReady = false;
+
+// Diagnostic only — never logs the secret itself, just whether it arrived and whether it
+// parses. Prints once at startup so it's visible in whatever platform's log viewer without
+// needing to reproduce the failure first.
+const rawEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+if (rawEnv) {
+  console.log(`[auth] FIREBASE_SERVICE_ACCOUNT_JSON is present, length ${rawEnv.length} characters.`);
+  try {
+    const parsed = JSON.parse(rawEnv);
+    console.log(`[auth] It parses as valid JSON. project_id: ${parsed.project_id || '(missing!)'}, has private_key: ${!!parsed.private_key}, has client_email: ${!!parsed.client_email}.`);
+  } catch (parseErr) {
+    console.log(`[auth] It is present but does NOT parse as valid JSON: ${parseErr.message}`);
+  }
+} else {
+  console.log('[auth] FIREBASE_SERVICE_ACCOUNT_JSON is not set (process.env has no value for it at all).');
+}
+
 try {
   const { initializeApp, applicationDefault, cert } = require('firebase-admin/app');
   const { getAuth } = require('firebase-admin/auth');

@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# SQLite database and its WAL/SHM files — real runsheet/product/customer data,
+# never committed. data/.gitkeep keeps the empty directory tracked.
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Environment / secrets
+.env
+.env.local
+flattened.json
+servicekey.json
+*serviceaccount*.json
+*service-account*.json
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs
+npm-debug.log*
+*.log
