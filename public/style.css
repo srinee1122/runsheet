@@ -15,7 +15,8 @@ input,select,textarea,button{font-family:inherit;font-size:14px;}
 
 /* ---- shell ---- */
 .sidebar{width:210px;flex:none;background:var(--panel);border-right:1px solid var(--line);
-  display:flex;flex-direction:column;padding:16px 0;}
+  display:flex;flex-direction:column;padding:16px 0;
+  position:sticky;top:0;height:100vh;overflow-y:auto;}
 .brand{padding:0 16px 16px;border-bottom:1px solid var(--line-soft);margin-bottom:8px;}
 .brand b{display:block;font-size:15px;}
 .brand span{color:var(--ink-soft);font-size:11px;}
@@ -204,10 +205,43 @@ tr:hover td{background:#fafbfd;}
   position:sticky;left:0;background:#fff;z-index:2;text-align:left;font-size:11px;font-weight:500;}
 .mx-allround th:nth-child(2),.mx-allround td.mx-unit-cell{width:46px;
   position:sticky;left:140px;background:#fff;z-index:2;text-align:center;}
-.mx-inv-head{vertical-align:bottom;padding:4px 1px;}
+.mx-inv-head{vertical-align:bottom;padding:4px 1px;position:relative;}
 .mx-inv-head-rot{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;
   font-size:9.5px;font-weight:500;margin:0 auto;max-height:70px;overflow:hidden;}
 .mx-inv-head .mx-sn{color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;font-size:9px;}
+
+/* Hover tooltips for the product name (often truncated in the narrow 140px label
+   column) and the column header (shows only a stop number + invoice, not the shop
+   name). pointer-events:none is what guarantees these never interfere with clicking
+   the picker or typing into a cell — the tooltip is purely decorative to the browser,
+   even though it's visually sitting on top. mx-rowlabel already has position:sticky
+   (its own containing block for the absolutely-positioned tooltip below — no need to
+   also set position:relative there, the two aren't compatible on the same element).*/
+.mx-tooltip{
+  position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);
+  background:var(--ink);color:#f0f2f5;padding:6px 10px;border-radius:6px;font-size:12px;
+  white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s ease, transform .15s ease;
+  z-index:30;box-shadow:0 4px 14px rgba(0,0,0,.25);
+}
+.mx-tooltip b{color:#ffb03a;font-weight:600;margin-left:3px;}
+.mx-tooltip::after{
+  content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);
+  border:5px solid transparent;border-top-color:var(--ink);
+}
+.mx-tooltip-host:hover .mx-tooltip{opacity:1;transform:translateX(-50%) translateY(0);}
+/* The row-label tooltip sits in the leftmost column — centering it would push half its
+   width off the edge of the table, so it's left-aligned to the cell instead. */
+.mx-tooltip-left{left:0;transform:translateX(0) translateY(4px);}
+.mx-tooltip-left::after{left:14px;transform:none;}
+.mx-tooltip-host:hover .mx-tooltip-left{transform:translateX(0) translateY(0);}
+
+/* Quantity cells: shows product + shop together on focus (cursor actually in the input),
+   not hover — hovering across many cells while scanning the table would otherwise
+   flicker distractingly as the mouse moves. :focus-within is what lets the tooltip
+   respond to the child <input> being focused, since the input itself can't be the
+   hover/focus target and contain the tooltip at the same time. */
+.mx-tooltip-host-focus{position:relative;}
+.mx-tooltip-host-focus:focus-within .mx-tooltip{opacity:1;transform:translateX(-50%) translateY(0);}
 
 .mx-rowlabel-inner{display:flex;align-items:center;justify-content:space-between;gap:4px;}
 .mx-rowlabel-picker{flex:1;min-width:0;}
@@ -225,6 +259,22 @@ tr:hover td{background:#fafbfd;}
 .mx-drag-handle:hover .mx-drag-grip{color:var(--ink-soft);}
 .mx-drag-row.mx-dragging{opacity:0.4;}
 .mx-drag-row.mx-drag-over{box-shadow:inset 0 2px 0 var(--accent);}
+
+/* Alternating row colors for both tables, and an orange highlight on whichever row has
+   an input currently focused — so it's obvious at a glance which row you're editing on
+   a wide, busy sheet. The highlight uses box-shadow directly on the row (matching the
+   existing drag-over technique above, known to render correctly on <tr> in this app)
+   rather than a border, since table row borders are unreliable across browsers. The All
+   Round Items table's sticky label/unit columns keep their own explicit white
+   background regardless of striping — overriding that too would mean fighting their
+   layering for a cosmetic-only difference on two narrow columns. */
+.mx-stripe-row:nth-child(even){background:var(--line-soft);}
+.mx-main tbody .mx-stripe-row:nth-child(even) td{background:var(--line-soft);}
+.mx-allround tbody .mx-stripe-row:nth-child(even) td:not(.mx-rowlabel):not(.mx-unit-cell){background:var(--line-soft);}
+.mx-stripe-row:focus-within{box-shadow:inset 0 2px 0 #f2994a, inset 0 -2px 0 #f2994a;}
+
+.pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft);}
+.pagination button:disabled{opacity:.4;cursor:default;}
 
 @media (max-width:900px){
   .sidebar{width:64px;} .sidebar .brand span,.sidebar .nav a span.label{display:none;}

@@ -1,7 +1,6 @@
 // components/builder.js
 import { Api } from '../lib/api.js';
 import { round2 } from '../lib/round2.js';
-import RoundItemPicker from './round-item-picker.js';
 import PhotoReviewPanel from './photo-review.js';
 import MatrixView from './matrix-view.js';
 
@@ -104,71 +103,21 @@ function mergePages(pages) {
   return [...map.values()];
 }
 
-// small inline sub-component: the "pick product + unit + qty + add" row for one stop.
-// Any product in the catalog can be picked — the up-to-10 preset columns (Settings page)
-// only control which round items get their own column at the top of the printed sheet;
-// everything else still prints fine in the "All Round Items" matrix below it.
-const RoundItemAdder = {
-  components: { RoundItemPicker },
-  props: { stop: Object, products: Array, frequentColumns: Array },
-  emits: ['add'],
-  data() { return { draft: { product_id: null, unit: 'CTN', qty: null, packing_type: 'carton' } }; },
-  computed: {
-    matchedColumn() {
-      return (this.frequentColumns || []).find(c => c.product_id === this.draft.product_id) || null;
-    },
-  },
-  watch: {
-    // default the packing type and entry unit to the product's own settings whenever the
-    // product changes — the clerk can still override either below before adding
-    'draft.product_id'(id) {
-      const p = this.products.find(x => x.id === id);
-      this.draft.packing_type = (p && p.packing_type) || 'carton';
-      this.draft.unit = (p && p.entry_unit) || 'CTN';
-    },
-  },
-  methods: {
-    add() {
-      if (!this.draft.product_id || !this.draft.qty) return;
-      this.$emit('add', { ...this.draft });
-      this.draft.product_id = null;
-      this.draft.qty = null;
-      this.draft.packing_type = 'carton';
-    },
-  },
-  template: `
-  <div class="field-row" style="align-items:flex-end;">
-    <div class="field" style="flex:2;">
-      <RoundItemPicker :products="products" :frequentColumns="frequentColumns" v-model="draft.product_id" />
-      <div class="hint" v-if="matchedColumn" style="color:var(--good)">Prints in top column: {{ matchedColumn.code }}</div>
-    </div>
-    <div class="field" style="flex:none;width:110px;">
-      <select v-model="draft.unit"><option value="CTN">Cartons</option><option value="PCS">Pieces</option></select>
-    </div>
-    <div class="field" style="flex:none;width:100px;">
-      <input type="number" min="0" step="0.01" v-model.number="draft.qty" placeholder="Qty" />
-    </div>
-    <div class="field" style="flex:none;width:110px;">
-      <select v-model="draft.packing_type" title="Billing classification only — doesn't change any counts">
-        <option value="carton">Carton</option>
-        <option value="bag">Bag</option>
-      </select>
-    </div>
-    <div class="field" style="flex:none;">
-      <button @click="add">+ Add</button>
-    </div>
-  </div>
-  `,
-};
-
 export default {
   props: { id: { type: String, default: null } },
-  components: { PhotoReviewPanel, RoundItemAdder, MatrixView },
+  components: { PhotoReviewPanel, MatrixView },
   data() {
     return {
-      viewMode: 'list', // 'list' | 'matrix' — both operate on the same `stops` array
+      // Matrix view is now the only layout — this file used to also support a List view;
+      // its removal is why several methods below (moveUp/moveDown/removeStop/addStop) are
+      // simpler than you'd expect for a single-view file — they're still exactly what
+      // MatrixView calls via its emits.
       runsheetId: null,
       version: null, // optimistic-concurrency guard — set once a sheet exists on the server
+      showVersions: false,
+      versions: [], // lightweight list (no data) for the version-history modal
+      loadingVersions: false,
+      viewingVersion: null, // {version, saved_by, saved_at} once a past version's content has been loaded into the editor for review — cleared on the next real Save
       header: { sheet_no: '', area: '', delivery_man: '', vehicle_no: '', run_date: '', delivery_date: '' },
       stops: [],
       products: [],
@@ -189,7 +138,7 @@ export default {
     };
   },
   computed: {
-    atLimit() { return this.stops.length >= 20; },
+    atLimit() { return this.stops.length >= 25; },
     sheetTotals() {
       let ctns = 0, ri = 0;
       for (const s of this.stops) { ctns += this.rowCtns(s); ri += this.rowRI(s); }
@@ -203,26 +152,37 @@ export default {
     },
   },
   watch: {
-    // Any edit — from List view, Matrix view, or the header fields — schedules a debounced
-    // background save. Both views mutate this same `stops` array, so one watcher here
-    // covers both. Guarded by readyForAutoSave so the initial data load (mounted() setting
+    // Any edit — Matrix view or the header fields — schedules a debounced background
+    // save. Guarded by readyForAutoSave so the initial data load (mounted() setting
     // these for the first time) never itself counts as an edit worth saving.
     stops: { deep: true, handler() { this.scheduleAutoSave(); } },
     header: { deep: true, handler() { this.scheduleAutoSave(); } },
+    // Reacts to navigating to a genuinely different sheet (or back to a blank one)
+    // without relying on a full component remount — Vue Router reuses this same
+    // instance when only the :id param changes within one route, updating this prop
+    // reactively instead. Skips the one case where id changes but nothing should
+    // reload: right after this very sheet's first auto-save assigns it an id and
+    // updates the URL to match — by then runsheetId already equals the new id, so
+    // there's nothing new to fetch, and reloading here would visibly flicker/reset
+    // the page for no reason a few seconds into every brand-new sheet.
+    async id(newId) {
+      // newId is always a string (route params always are); runsheetId is a number (the
+      // server returns a real number). Comparing them directly ("5" === 5) is always
+      // false, which meant this skip check never actually matched the "this sheet just
+      // got its first id" case — loadSheet() ran anyway, reassigning stops with fresh
+      // _uid values, which forces Vue to destroy and recreate every stop's DOM elements.
+      // That's the flicker. String() on both sides is what actually makes this work.
+      if (String(newId || '') === String(this.runsheetId || '')) return;
+      this.readyForAutoSave = false; // the reset below shouldn't itself count as an edit
+      await this.loadSheet(newId);
+      this.$nextTick(() => { this.readyForAutoSave = true; });
+    },
   },
   async mounted() {
     this.products = await Api.get('/api/products');
     this.customers = await Api.get('/api/customers');
     this.frequentColumns = await Api.get('/api/settings/frequent-columns');
-    if (this.id) {
-      const rs = await Api.get(`/api/runsheets/${this.id}`);
-      this.runsheetId = rs.id;
-      this.version = rs.version;
-      this.header = { sheet_no: rs.sheet_no, area: rs.area, delivery_man: rs.delivery_man, vehicle_no: rs.vehicle_no, run_date: rs.run_date, delivery_date: rs.delivery_date };
-      this.stops = (rs.data.stops || []).map(s => ({ ...migrateStopCtns(s), _uid: uid() }));
-    } else {
-      if (!this.header.run_date) this.header.run_date = new Date().toISOString().slice(0, 10);
-    }
+    await this.loadSheet(this.id);
     // Wait a tick so the assignments just above (which the watchers above also see) are
     // fully flushed before auto-save starts reacting to changes — otherwise loading an
     // existing sheet would immediately "auto-save" data that hasn't actually changed.
@@ -234,15 +194,33 @@ export default {
     clearTimeout(this.autoSaveTimer);
   },
   methods: {
+    // Loads an existing sheet's content, or resets to a blank new-sheet state when id
+    // is falsy. Called once from mounted() for the initial load, and again from the id
+    // watcher above for a genuine sheet switch.
+    async loadSheet(id) {
+      if (id) {
+        const rs = await Api.get(`/api/runsheets/${id}`);
+        this.runsheetId = rs.id;
+        this.version = rs.version;
+        this.header = { sheet_no: rs.sheet_no, area: rs.area, delivery_man: rs.delivery_man, vehicle_no: rs.vehicle_no, run_date: rs.run_date, delivery_date: rs.delivery_date };
+        this.stops = (rs.data.stops || []).map(s => ({ ...migrateStopCtns(s), _uid: uid() }));
+      } else {
+        this.runsheetId = null;
+        this.version = null;
+        this.header = { sheet_no: '', area: '', delivery_man: '', vehicle_no: '', run_date: new Date().toISOString().slice(0, 10), delivery_date: '' };
+        this.stops = [];
+      }
+      this.viewingVersion = null;
+      this.autoSaveConflict = false;
+    },
     round2, // exposed to template
     productOf(id) { return this.products.find(p => p.id === id); },
-    // short code for the up-to-10 preset products that get their own column at the top
-    // of the printed sheet; null for every other product (which still prints fine — it
-    // just falls into the "All Round Items" matrix instead of a dedicated column).
-    columnCodeFor(productId) {
-      const col = (this.frequentColumns || []).find(c => c.product_id === productId);
-      return col ? col.code : null;
-    },
+    // Kept as the exact decimal sum, not rounded up — a fractional RI is usually a sign
+    // of a wrong entry somewhere, and rounding it away would hide exactly the thing a
+    // clerk needs to notice and fix. This is what the bottom stats bar's "Total RI" and
+    // "TOTAL PACKAGES" are built from too. The printed sheet still rounds each product
+    // up to a whole carton, so this figure and the printed one can differ a little —
+    // that gap is expected, not a bug.
     rowRI(stop) {
       let total = 0;
       for (const ri of stop.round_items) total += Number(ri.qty_ctn) || 0;
@@ -269,17 +247,6 @@ export default {
       this.stops.splice(toIndex, 0, s);
     },
 
-    addRoundItem(stop, draft) {
-      if (!draft.product_id || !draft.qty) return;
-      const p = this.productOf(draft.product_id);
-      if (!p) return;
-      const qty = Number(draft.qty);
-      const qty_ctn = draft.unit === 'PCS' ? qty / (p.qty_per_ctn || 1) : qty;
-      stop.round_items.push({ product_id: p.id, qty_ctn: round2(qty_ctn), packing_type: draft.packing_type === 'bag' ? 'bag' : 'carton' });
-      draft.qty = null;
-    },
-    removeRoundItem(stop, i) { stop.round_items.splice(i, 1); },
-
     cleanStops() {
       return this.stops.map(s => ({
         so_no: s.so_no || '', invoice_no: s.invoice_no || '', customer: s.customer || '',
@@ -287,17 +254,19 @@ export default {
         round_items: (s.round_items || []).map(r => ({
           product_id: r.product_id, qty_ctn: Number(r.qty_ctn) || 0,
           packing_type: r.packing_type === 'bag' ? 'bag' : 'carton',
+          entry_unit: r.entry_unit === 'PCS' ? 'PCS' : 'CTN',
         })),
       }));
     },
 
     async save() {
-      if (this.stops.length > 20) { alert('Max 20 invoices per sheet (one-page rule).'); return false; }
+      if (this.stops.length > 25) { alert('Max 25 invoices per sheet (one-page rule).'); return false; }
       this.saving = true; this.saveMsg = '';
       const payload = {
         ...this.header,
         data: { stops: this.cleanStops(), frequentColumns: this.frequentColumns },
         version: this.version,
+        explicit: true, // tells the server to snapshot the version being replaced — see db.js
       };
       let ok = true;
       try {
@@ -313,6 +282,7 @@ export default {
         this.saveMsg = 'Saved.';
         this.lastAutoSavedAt = new Date();
         this.autoSaveConflict = false;
+        this.viewingVersion = null;
       } catch (e) {
         ok = false;
         if (e.status === 409) {
@@ -343,6 +313,30 @@ export default {
       this.autoSaveConflict = false; // local state now matches the server again
     },
 
+    // ---------------- version history ----------------
+    async openVersionHistory() {
+      if (!this.runsheetId) return;
+      this.showVersions = true;
+      this.loadingVersions = true;
+      try {
+        this.versions = await Api.get(`/api/runsheets/${this.runsheetId}/versions`);
+      } finally {
+        this.loadingVersions = false;
+      }
+    },
+    // Loads a past version's content into the editor for review — deliberately does NOT
+    // touch this.version (which still tracks the real current row), so a Save afterward
+    // correctly conflict-checks against the actual latest state and, being an explicit
+    // save, snapshots whatever's about to be replaced too. Restoring is just "load old
+    // content, then Save normally" — there's no separate, irreversible restore action.
+    async loadVersionForReview(versionRow) {
+      const v = await Api.get(`/api/runsheets/${this.runsheetId}/versions/${versionRow.id}`);
+      this.header = { sheet_no: v.sheet_no, area: v.area, delivery_man: v.delivery_man, vehicle_no: v.vehicle_no, run_date: v.run_date, delivery_date: v.delivery_date };
+      this.stops = (v.data.stops || []).map(s => ({ ...migrateStopCtns(s), _uid: uid() }));
+      this.viewingVersion = { version: v.version, saved_by: v.saved_by, saved_at: v.saved_at };
+      this.showVersions = false;
+    },
+
     // ---------------- background auto-save (draft protection) ----------------
     // Debounced so a burst of keystrokes doesn't fire a save per character — waits for a
     // short pause in editing, then saves quietly through the exact same save path as the
@@ -355,12 +349,14 @@ export default {
     },
     async autoSave() {
       if (this.saving || this.autoSaving) return; // don't overlap with a manual save, or with itself
-      if (this.stops.length > 20) return; // the person will hit this via a manual Save/Print anyway; stay quiet here
+      if (this.stops.length > 25) return; // the person will hit this via a manual Save/Print anyway; stay quiet here
       this.autoSaving = true;
       const payload = {
         ...this.header,
         data: { stops: this.cleanStops(), frequentColumns: this.frequentColumns },
         version: this.version,
+        // deliberately no `explicit` here — auto-save fires every ~2.5s while typing and
+        // shouldn't create a version-history snapshot every time, only real Saves should.
       };
       try {
         if (this.runsheetId) {
@@ -422,7 +418,7 @@ export default {
       this.showReview = true;
     },
     onConfirmSo(so) {
-      if (this.stops.length >= 20) { alert('This sheet already has 20 invoices (one-page rule) — remove one before adding another.'); return; }
+      if (this.stops.length >= 25) { alert('This sheet already has 25 invoices (one-page rule) — remove one before adding another.'); return; }
       const roundItems = (so.round_items || [])
         .filter(r => !r.struck && r.mapped_product_id)
         .map(r => {
@@ -455,7 +451,7 @@ export default {
   <div class="page-head">
     <div>
       <h1>Runsheet Builder</h1>
-      <div class="sub">{{ runsheetId ? 'Editing saved sheet #' + runsheetId : 'New sheet' }}<span v-if="autoSaveStatusText"> &middot; {{ autoSaveStatusText }}</span> &middot; max 20 invoices per sheet</div>
+      <div class="sub">{{ runsheetId ? 'Editing saved sheet #' + runsheetId : 'New sheet' }}<span v-if="autoSaveStatusText"> &middot; {{ autoSaveStatusText }}</span> &middot; max 25 invoices per sheet</div>
     </div>
     <div class="toolbar">
       <input ref="photoInput" type="file" accept="image/*" multiple style="display:none" @change="onPhotosChosen" />
@@ -463,7 +459,35 @@ export default {
       <button @click="addStop" :disabled="atLimit">+ Add stop</button>
       <button class="primary" @click="save" :disabled="saving">{{ saving ? 'Saving…' : 'Save' }}</button>
       <button @click="print" :disabled="saving">🖨️ Print</button>
+      <button v-if="runsheetId" @click="openVersionHistory">Version History</button>
       <span class="hint" v-if="saveMsg">{{ saveMsg }}</span>
+    </div>
+  </div>
+
+  <div class="warn-banner" v-if="viewingVersion">
+    Reviewing version {{ viewingVersion.version }}, saved by {{ viewingVersion.saved_by || 'someone' }} at {{ viewingVersion.saved_at }}
+    — this isn't the current saved sheet yet. Click Save to restore it, or Version History to pick a different one.
+  </div>
+
+  <div class="overlay" v-if="showVersions" @click.self="showVersions=false">
+    <div class="modal">
+      <h2>Version History</h2>
+      <p class="hint" style="margin-top:-6px;">Every time this sheet was saved (not counting the automatic background
+        drafts). Pick one to load its content back into the editor for review — nothing changes until you Save.</p>
+      <p class="hint" v-if="loadingVersions">Loading…</p>
+      <table v-if="!loadingVersions && versions.length" style="margin-top:10px;">
+        <thead><tr><th style="text-align:left;">Version</th><th style="text-align:left;">Saved by</th><th style="text-align:left;">Saved at</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="v in versions" :key="v.id">
+            <td>{{ v.version }}</td>
+            <td>{{ v.saved_by || '—' }}</td>
+            <td class="hint">{{ v.saved_at }}</td>
+            <td><button class="small" @click="loadVersionForReview(v)">Load</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="empty" v-if="!loadingVersions && !versions.length">No earlier saves yet — this sheet hasn't been through more than one Save.</p>
+      <div class="modal-actions"><button @click="showVersions=false">Close</button></div>
     </div>
   </div>
 
@@ -479,12 +503,6 @@ export default {
     </div>
   </div>
 
-  <div class="toolbar" style="margin-bottom:10px;">
-    <button :class="{primary: viewMode==='list'}" @click="viewMode='list'">List view</button>
-    <button :class="{primary: viewMode==='matrix'}" @click="viewMode='matrix'">Matrix view</button>
-    <span class="hint">Both work on the same stops &mdash; switch anytime without losing anything.</span>
-  </div>
-
   <div class="progress-card" v-if="photoProgress">
     <b>Extracting photos: {{ photoProgress.done }} / {{ photoProgress.total }}</b>
     <div class="progress-bar-track"><div class="progress-bar-fill" :style="{width: (100*photoProgress.done/photoProgress.total)+'%'}"></div></div>
@@ -493,78 +511,16 @@ export default {
   <PhotoReviewPanel v-if="showReview" :salesOrders="reviewSalesOrders" :products="products" :frequentColumns="frequentColumns"
     @confirm="onConfirmSo" @discard="onDiscardSo" @close="showReview=false" />
 
-  <div class="limit-banner" v-if="atLimit">This sheet has 20 invoices — the one-page limit. Remove a stop before adding another.</div>
+  <div class="limit-banner" v-if="atLimit">This sheet has 25 invoices — the one-page limit. Remove a stop before adding another.</div>
   <div class="warn-banner" v-if="autoSaveConflict">This runsheet was changed by someone else while you were editing — auto-save is paused so nothing gets silently overwritten. Click Save when you're ready to see what changed and continue.</div>
 
-  <template v-if="viewMode==='list'">
-  <datalist id="customer-list">
-    <option v-for="c in customers" :key="c.id" :value="c.name" />
-  </datalist>
-
-  <div v-for="(stop, i) in stops" :key="stop._uid" class="stop-card">
-    <span class="stop-index">Stop {{ i+1 }}</span>
-    <div class="stop-actions">
-      <button class="ghost small" @click="moveUp(i)" :disabled="i===0" title="Move up">&uarr;</button>
-      <button class="ghost small" @click="moveDown(i)" :disabled="i===stops.length-1" title="Move down">&darr;</button>
-      <button class="danger small" @click="removeStop(i)">Remove</button>
-    </div>
-
-    <div class="field-row" style="margin-top:18px;">
-      <div class="field"><label>Sales Order No</label><input type="text" v-model="stop.so_no" /></div>
-      <div class="field">
-        <label>Invoice No</label>
-        <input type="text" v-model="stop.invoice_no" @input="stop._invoiceNeedsInput=false"
-          :style="stop._invoiceNeedsInput && !stop.invoice_no ? 'border-color:var(--bad);background:var(--bad-soft)' : ''" />
-        <div class="hint" style="color:var(--bad)" v-if="stop._invoiceNeedsInput && !stop.invoice_no">From photo — key in the invoice number.</div>
-      </div>
-      <div class="field">
-        <label>Customer</label>
-        <input type="text" v-model="stop.customer" list="customer-list" placeholder="Search or type new..." />
-      </div>
-      <div class="field"><label>Taken by</label><input type="text" v-model="stop.taken_by" /></div>
-    </div>
-
-    <div class="field-row">
-      <div class="field" style="max-width:110px;">
-        <label>CTNS &mdash; Cartons</label>
-        <input type="number" min="0" step="1" v-model.number="stop.ctns_carton" />
-      </div>
-      <div class="field" style="max-width:110px;">
-        <label>CTNS &mdash; Bags</label>
-        <input type="number" min="0" step="1" v-model.number="stop.ctns_bag" />
-      </div>
-      <div class="field"><label>Note (prints on sheet)</label><input type="text" v-model="stop.note" /></div>
-    </div>
-    <p class="hint" style="margin-top:-6px;">Manual box total the packing team counted &mdash; split by Carton vs Bag purely for delivery-cost billing, same as round items. Both count the same toward CTNS/TOTAL PKGS.</p>
-
-    <div class="field">
-      <label>Round items <span class="hint">— any product can be a round item; up to 10 preset ones get their own column on the printed sheet</span></label>
-      <div v-if="stop.round_items.length" style="margin-bottom:8px;">
-        <span v-for="(ri, ri_i) in stop.round_items" :key="ri_i" class="ri-chip">
-          <b class="mono" v-if="columnCodeFor(ri.product_id)">{{ columnCodeFor(ri.product_id) }}</b>
-          {{ productOf(ri.product_id)?.name || '(deleted product)' }}:
-          <b class="mono">{{ ri.qty_ctn }} ctn</b>
-          <span class="hint" v-if="productOf(ri.product_id)">({{ round2(ri.qty_ctn * productOf(ri.product_id).qty_per_ctn) }} pcs)</span>
-          <span class="hint">&middot; {{ ri.packing_type === 'bag' ? 'Bag' : 'Carton' }}</span>
-          <button @click="removeRoundItem(stop, ri_i)">&times;</button>
-        </span>
-      </div>
-      <RoundItemAdder :stop="stop" :products="products" :frequentColumns="frequentColumns" @add="addRoundItem(stop, $event)" />
-    </div>
-
-    <div class="hint">Row TOTAL PKGS = {{ rowCtns(stop) }} CTNS + {{ round2(rowRI(stop)) }} RI = <b class="mono">{{ rowTotalPkgs(stop) }}</b></div>
-  </div>
-
-  <div class="empty" v-if="!stops.length">No stops yet. Add one manually or pull from a photo.</div>
-  </template>
-
-  <MatrixView v-else-if="viewMode==='matrix'" :stops="stops" :products="products" :customers="customers"
+  <MatrixView :stops="stops" :products="products" :customers="customers"
     :frequentColumns="frequentColumns" :atLimit="atLimit"
     @add-stop="addStop" @remove-stop="removeStop"
     @move-stop="(i, dir) => dir==='up' ? moveUp(i) : moveDown(i)" @reorder-stop="reorderStop" />
 
   <div class="totals-strip" v-if="stops.length">
-    <span>Invoices: <b>{{ sheetTotals.invoices }}</b> / 20</span>
+    <span>Invoices: <b>{{ sheetTotals.invoices }}</b> / 25</span>
     <span>Total CTNS: <b>{{ sheetTotals.ctns }}</b></span>
     <span>Total RI: <b>{{ sheetTotals.ri }}</b></span>
     <span>TOTAL PACKAGES: <b>{{ sheetTotals.pkgs }}</b></span>

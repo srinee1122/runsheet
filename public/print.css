@@ -108,9 +108,9 @@ table{border-collapse:collapse;width:100%}
 .grand td{border:.75px solid var(--rule);font-size:9px;padding:2.5px 5px}
 .grand .lbl{font:500 9px var(--cond);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft)}
 .grand td.val{font:600 11px var(--mono);text-align:right}
-.grand tr.final td{background:var(--ink);color:#fff;border-color:var(--ink)}
-.grand tr.final .lbl{color:#fff;font-weight:600}
-.grand tr.final td.val{font-size:14px}
+.grand tr.final td{background:#fff;color:var(--ink)}
+.grand tr.final .lbl{color:var(--ink-soft);font-weight:600}
+.grand tr.final td.val{font-size:14px;font-weight:700;color:var(--ink)}
 
 .foot{display:flex;justify-content:space-between;margin-top:auto;padding-top:5px;
   font:400 7.5px/1 var(--mono);color:var(--ink-soft);letter-spacing:.04em}

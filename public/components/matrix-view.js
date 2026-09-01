@@ -39,10 +39,10 @@ export default {
     };
   },
   computed: {
-    // up to 10 preset columns, resolved against the current product list — same routing
+    // up to 15 preset columns, resolved against the current product list — same routing
     // print.js uses, so a product's spot here always matches where it'll print
     columns() {
-      return (this.frequentColumns || []).filter(c => c.product_id).slice(0, 10).map(c => {
+      return (this.frequentColumns || []).filter(c => c.product_id).slice(0, 15).map(c => {
         const p = this.products.find(x => x.id === c.product_id);
         return {
           product_id: c.product_id, code: c.code || (p ? p.name : ''), qty: (p && p.qty_per_ctn) || 1,
@@ -93,6 +93,21 @@ export default {
     // it's done, which also clears the picker's visible text (see ProductPicker's own
     // modelValue watcher), so the field is immediately ready for the next product.
     newRowProductId(val) { if (val) this.addProductRow(); },
+    // BuilderPage renders this component immediately, before its own mounted() hook has
+    // actually fetched the runsheet — so the FIRST time this watcher would matter, stops
+    // arrives here as [] and only gets its real content a moment later, once BuilderPage's
+    // fetch resolves and reassigns it wholesale (a new array reference, which is exactly
+    // what this watcher is keyed on). Without this, reopening an existing saved sheet with
+    // round items already on it showed "No round-item rows yet" and blank quantity cells —
+    // rebuildMatrixRows() and seedEntryDisplay() had already run once in created(), against
+    // the empty initial stops, and nothing ever told them to run again for the real data.
+    // Building a brand-new sheet from scratch never hit this, since adding a product there
+    // goes through addProductRow() directly, not through this initial build path — which is
+    // why this went unnoticed until testing against a reloaded, already-saved sheet.
+    stops() {
+      this.rebuildMatrixRows();
+      this.seedEntryDisplay();
+    },
   },
   created() {
     this.rebuildMatrixRows();
@@ -101,18 +116,36 @@ export default {
   methods: {
     round2,
     productOf(id) { return this.products.find(p => p.id === id); },
+    // Finds the actual stored round_item for a product on any stop — used to seed the
+    // packing/unit toggle buttons from what THIS runsheet actually has saved, rather than
+    // the product's current Settings default, which could easily differ from whatever was
+    // toggled during this specific sheet's own building session.
+    storedRoundItemFor(productId) {
+      for (const s of this.stops) {
+        const ri = (s.round_items || []).find(r => r.product_id === productId);
+        if (ri) return ri;
+      }
+      return null;
+    },
     rebuildMatrixRows() {
       const ids = new Set();
       for (const p of this.products) if (p.is_round_item && !this.columnProductIds.has(p.id)) ids.add(p.id);
       for (const s of this.stops) for (const ri of s.round_items || []) if (!this.columnProductIds.has(ri.product_id)) ids.add(ri.product_id);
       this.matrixProductRows = [...ids].map(id => this.products.find(p => p.id === id)).filter(Boolean)
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => a.id - b.id);
       for (const p of this.matrixProductRows) {
-        if (!(p.id in this.rowPacking)) this.rowPacking[p.id] = p.packing_type || 'carton';
-        if (!(p.id in this.rowUnit)) this.rowUnit[p.id] = p.entry_unit === 'PCS' ? 'PCS' : 'CTN';
+        const stored = this.storedRoundItemFor(p.id);
+        if (!(p.id in this.rowPacking)) this.rowPacking[p.id] = (stored && stored.packing_type) || p.packing_type || 'carton';
+        if (!(p.id in this.rowUnit)) this.rowUnit[p.id] = (stored && stored.entry_unit) || (p.entry_unit === 'PCS' ? 'PCS' : 'CTN');
       }
     },
 
+    // Kept as the exact decimal sum, not rounded up — a fractional RI is usually a sign
+    // of a wrong entry somewhere (a stray decimal, a mistyped quantity), and rounding it
+    // away would hide exactly the thing a clerk needs to notice and fix. The printed
+    // sheet still rounds each product up to a whole carton (cartons have to be whole on
+    // the actual load), so this figure and the printed one can differ by a little — that
+    // gap is expected, not a bug.
     rowRI(stop) {
       let t = 0;
       for (const ri of stop.round_items || []) t += Number(ri.qty_ctn) || 0;
@@ -180,8 +213,10 @@ export default {
       const p = this.productOf(productId);
       const qtyPerCtn = (p && p.qty_per_ctn) || 1;
       const qty_ctn = this.entryUnitFor(p) === 'PCS' ? val / qtyPerCtn : val;
-      if (idx >= 0) stop.round_items[idx].qty_ctn = round2(qty_ctn);
-      else stop.round_items.push({ product_id: productId, qty_ctn: round2(qty_ctn), packing_type: packingDefault || 'carton' });
+      if (idx >= 0) {
+        stop.round_items[idx].qty_ctn = round2(qty_ctn);
+        stop.round_items[idx].entry_unit = this.entryUnitFor(p);
+      } else stop.round_items.push({ product_id: productId, qty_ctn: round2(qty_ctn), packing_type: packingDefault || 'carton', entry_unit: this.entryUnitFor(p) });
     },
     columnPackingDefault(productId) { return (this.productOf(productId) || {}).packing_type || 'carton'; },
 
@@ -193,6 +228,9 @@ export default {
       for (const s of this.stops) t += this.rawQtyCtn(s, productId);
       return round2(t);
     },
+    // Per-stop total across just the All Round Items section's products — kept as the
+    // exact decimal sum, same reasoning as rowRI above: a fraction here is a useful
+    // signal that something was mistyped, not something to smooth away.
     matrixColTotal(stop) {
       let t = 0;
       for (const p of this.matrixProductRows) t += this.rawQtyCtn(stop, p.id);
@@ -218,13 +256,18 @@ export default {
     // Changing a matrix row's entry unit re-renders every existing cell in that row from the
     // canonical stored cartons figure, converted into the new unit — otherwise a cell that
     // already shows "12" would keep showing "12" after switching from pieces to cartons,
-    // which would silently mean a completely different quantity.
+    // which would silently mean a completely different quantity. Also persists the unit
+    // onto every existing round_item for this product, same as setRowPacking does for
+    // packing_type — without this, the toggle was purely in-memory and print (which loads
+    // fresh from what's actually saved) had no way to know it had ever been switched.
     applyRowUnit(productId, newUnit) {
       this.rowUnit[productId] = newUnit;
       const p = this.productOf(productId);
       const qtyPerCtn = (p && p.qty_per_ctn) || 1;
       for (const stop of this.stops) {
         const key = this.entryKey(stop, productId);
+        const ri = (stop.round_items || []).find(r => r.product_id === productId);
+        if (ri) ri.entry_unit = newUnit;
         if (!(key in this.entryDisplay)) continue;
         const qty_ctn = this.rawQtyCtn(stop, productId);
         const val = newUnit === 'PCS' ? qty_ctn * qtyPerCtn : qty_ctn;
@@ -245,7 +288,6 @@ export default {
       const p = this.products.find(x => x.id === this.newRowProductId);
       if (!p) return;
       this.matrixProductRows.push(p);
-      this.matrixProductRows.sort((a, b) => a.name.localeCompare(b.name));
       this.rowPacking[p.id] = p.packing_type || 'carton';
       this.rowUnit[p.id] = p.entry_unit === 'PCS' ? 'PCS' : 'CTN';
       // Deferred to the next tick: resetting this in the same reactive flush that detected
@@ -322,7 +364,6 @@ export default {
       const idx = this.matrixProductRows.findIndex(p => p.id === oldProductId);
       if (idx >= 0) {
         this.matrixProductRows.splice(idx, 1, newProduct);
-        this.matrixProductRows.sort((a, b) => a.name.localeCompare(b.name));
       }
     },
     // Enter always jumps to the Product field of the next row, no matter which column you
@@ -423,8 +464,15 @@ export default {
       }
     },
     // Up/Down move to the same column in the previous/next row — safe to take over
-    // unconditionally, since arrow-up/down has no native meaning in a single-line input.
+    // unconditionally, since arrow-up/down has no native meaning in a single-line text
+    // input. It does have a native meaning in a number input though (increment/decrement),
+    // which is exactly what we're overriding — so preventDefault() has to run regardless
+    // of whether a target field is actually found, not just on a successful navigation.
+    // Skipping it at the table's top/bottom edge (or a row that happens to lack a field
+    // in this exact column, like the All Round Items grid's "add product" row) was
+    // exactly what let quantities silently increment/decrement while navigating.
     handleVerticalNav(event, direction) {
+      event.preventDefault();
       const cell = event.target.closest('td');
       const row = cell && cell.closest('tr');
       const tbody = row && row.closest('tbody');
@@ -435,7 +483,7 @@ export default {
       const targetRow = rows[rowIndex + direction];
       if (!targetRow) return; // top/bottom edge — nothing to do
       const field = targetRow.children[cellIndex] && targetRow.children[cellIndex].querySelector('input, select, textarea');
-      if (field) { event.preventDefault(); field.focus(); if (field.select) field.select(); }
+      if (field) { field.focus(); if (field.select) field.select(); }
     },
     // Left/Right move to the previous/next editable field in the row — but only when the
     // cursor is already at that edge of the current text (or the field has no text-cursor
@@ -504,7 +552,7 @@ export default {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(stop, i) in stops" :key="stop._uid" class="mx-drag-row"
+        <tr v-for="(stop, i) in stops" :key="stop._uid" class="mx-drag-row mx-stripe-row"
             :class="{ 'mx-dragging': draggingRowIndex===i, 'mx-drag-over': dragOverRowIndex===i }"
             @dragover.prevent @dragenter.prevent="onRowDragEnter(i)" @dragleave="onRowDragLeave(i)" @drop.prevent="onRowDrop(i)">
           <td class="center mono mx-drag-handle" draggable="true" title="Drag to reorder"
@@ -564,16 +612,17 @@ export default {
         <tr>
           <th style="text-align:left;width:140px;">Product</th>
           <th style="width:46px;">Unit</th>
-          <th v-for="(stop, i) in stops" :key="stop._uid" class="mx-inv-head">
+          <th v-for="(stop, i) in stops" :key="stop._uid" class="mx-inv-head mx-tooltip-host">
             <div class="mx-inv-head-rot"><span class="mx-sn">{{ i+1 }}&middot;</span>{{ stop.invoice_no || '—' }}</div>
+            <div class="mx-tooltip">Shop: <b>{{ stop.customer || 'not entered yet' }}</b></div>
           </th>
           <th style="width:38px;">Q/C</th>
           <th style="width:28px;"></th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in matrixProductRows" :key="row.id">
-          <td class="mx-rowlabel">
+        <tr v-for="row in matrixProductRows" :key="row.id" class="mx-stripe-row">
+          <td class="mx-rowlabel mx-tooltip-host">
             <div class="mx-rowlabel-inner">
               <ProductPicker class="mx-rowlabel-picker" :key="row.id + '-' + (rowPickerResetSeq[row.id] || 0)"
                 :products="productsForRow(row.id)" :modelValue="row.id"
@@ -581,16 +630,20 @@ export default {
               <button type="button" class="mx-pack-btn" :class="rowPacking[row.id]==='bag' ? 'mx-pack-bag' : 'mx-pack-carton'"
                 @click="toggleRowPacking(row.id)" :title="'Packing: ' + packLabel(row.id) + ' — click to switch'">{{ packLabel(row.id) }}</button>
             </div>
+            <div class="mx-tooltip mx-tooltip-left">Product: <b>{{ row.name }}</b></div>
           </td>
           <td class="mx-unit-cell">
             <button type="button" class="mx-unit-btn"
               :class="entryUnitFor(row)==='PCS' ? 'mx-unit-pcs' : (rowPacking[row.id]==='bag' ? 'mx-unit-bag' : 'mx-unit-carton')"
               @click="toggleRowUnit(row.id)" :title="'Entry unit — click to switch'">{{ entryUnitFor(row)==='PCS' ? 'Pcs' : packLabel(row.id) }}</button>
           </td>
-          <td v-for="stop in stops" :key="stop._uid+'-'+row.id">
+          <td v-for="stop in stops" :key="stop._uid+'-'+row.id" class="mx-tooltip-host-focus">
             <input type="number" min="0" :step="cellStep(row)" :value="cellValue(stop, row.id)"
               @input="setCellValue(stop, row.id, $event.target.value, rowPacking[row.id])"
               @keydown="handleAllRoundKeyNav($event)" />
+            <div class="mx-tooltip">
+              Product: <b>{{ row.name }}</b><br>Shop: <b>{{ stop.customer || 'not entered yet' }}</b>
+            </div>
           </td>
           <td class="center mono">{{ row.qty_per_ctn }}</td>
           <td class="center"><button class="ghost small" @click="removeProductRow(row.id)" title="Remove row">&times;</button></td>

@@ -21,7 +21,7 @@ export default {
   methods: {
     productById(id) { return this.products.find(p => p.id === id); },
     addColumn() {
-      if (this.columns.length >= 10) return;
+      if (this.columns.length >= 15) return;
       this.columns.push({ product_id: null, code: '' });
     },
     removeColumn(i) { this.columns.splice(i, 1); },
@@ -66,7 +66,7 @@ export default {
 
   <div class="panel">
     <h2 style="margin-top:0;font-size:15px;">Frequent round-item columns
-      <span class="hint">(up to 10 &mdash; any product can be a round item on a stop; these are just the ones that get their own column at the top of the printed sheet instead of falling into the All Round Items matrix)</span></h2>
+      <span class="hint">(up to 15 &mdash; any product can be a round item on a stop; these are just the ones that get their own column at the top of the printed sheet instead of falling into the All Round Items matrix)</span></h2>
     <p class="hint" v-if="!products.length">No products yet. Add or import some on the Products page first.</p>
     <div v-for="(col, i) in columns" :key="i" class="field-row" style="align-items:flex-end;margin-bottom:10px;">
       <div class="field" style="flex:2;">
@@ -96,7 +96,7 @@ export default {
         <button class="danger" @click="removeColumn(i)">Remove</button>
       </div>
     </div>
-    <button @click="addColumn" :disabled="columns.length >= 10">+ Add column ({{ columns.length }}/10)</button>
+    <button @click="addColumn" :disabled="columns.length >= 15">+ Add column ({{ columns.length }}/15)</button>
     <div class="modal-actions" style="justify-content:flex-start;margin-top:14px;">
       <button class="primary" @click="saveColumns">Save columns</button>
       <span class="hint" v-if="saved" style="color:var(--good)">Saved.</span>

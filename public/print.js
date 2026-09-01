@@ -52,11 +52,15 @@ import { round2 } from './lib/round2.js';
   function buildData(rs, products) {
     const productById = new Map(products.map(p => [p.id, p]));
     const stops = (rs.data && rs.data.stops) || [];
-    const frequentColumns = ((rs.data && rs.data.frequentColumns) || []).filter(c => c.product_id).slice(0, 10);
+    const frequentColumns = ((rs.data && rs.data.frequentColumns) || []).filter(c => c.product_id).slice(0, 15);
 
     const cols = frequentColumns.map(c => {
       const p = productById.get(c.product_id);
-      return { code: c.code || (p ? p.name : ''), pack: p ? `${p.qty_per_ctn}/ctn` : '', qty: (p && p.qty_per_ctn) || 1, _pid: c.product_id };
+      // The unit this specific product is meant to be entered/shown in — mixed units
+      // across columns on the same sheet are expected, matching whatever each product's
+      // own Settings say, same as the Builder already shows while building.
+      const unit = (p && p.entry_unit === 'PCS') ? 'PCS' : 'CTN';
+      return { code: c.code || (p ? p.name : ''), pack: p ? `${p.qty_per_ctn}/ctn` : '', qty: (p && p.qty_per_ctn) || 1, unit, _pid: c.product_id };
     });
     const columnProductIds = new Set(cols.map(c => c._pid));
 
@@ -91,14 +95,40 @@ import { round2 } from './lib/round2.js';
       };
     });
 
-    // products that appear as round items on some stop but aren't one of the up-to-10 preset columns
+    // products that appear as round items on some stop but aren't one of the up-to-15 preset columns
     const matrixIds = new Set();
     for (const s of stops) for (const ri of s.round_items || []) if (!columnProductIds.has(ri.product_id)) matrixIds.add(ri.product_id);
     const matrixProducts = [...matrixIds].map(pid => productById.get(pid)).filter(Boolean)
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    // The Builder's per-row packing toggle applies to every existing AND new quantity in
+    // that row at once, so every stop's saved entry for a given product should already
+    // agree — this just reads back whichever one is actually stored, rather than assuming.
+    function packingTypeFor(productId) {
+      for (const s of stops) {
+        const ri = (s.round_items || []).find(r => r.product_id === productId);
+        if (ri) return ri.packing_type === 'bag' ? 'bag' : 'carton';
+      }
+      return 'carton';
+    }
+
+    // Same idea for the entry-unit toggle — the Builder now saves whichever unit was
+    // actually active when each quantity was entered/last toggled, so this reads that
+    // back rather than falling back to the product's current Settings default, which
+    // could easily have changed since (or just never matched what was toggled for this
+    // specific runsheet).
+    function entryUnitFor(productId, product) {
+      for (const s of stops) {
+        const ri = (s.round_items || []).find(r => r.product_id === productId);
+        if (ri && ri.entry_unit) return ri.entry_unit === 'PCS' ? 'PCS' : 'CTN';
+      }
+      return (product && product.entry_unit === 'PCS') ? 'PCS' : 'CTN';
+    }
+
     const all_round = matrixProducts.map(p => ({
       name: p.name, qty: p.qty_per_ctn || 1,
+      unit: entryUnitFor(p.id, p),
+      packing: packingTypeFor(p.id),
       byInv: stops.map(s => piecesFor(s, p.id, p.qty_per_ctn)),
     }));
 
@@ -141,8 +171,13 @@ import { round2 } from './lib/round2.js';
 
     const arCtnByInv = ROWS.map((_, i) =>
       ALL_ROUND.reduce((s, p) => s + ctnOf(p.byInv[i] || 0, p.qty), 0));
-    const arPcsByInv = ROWS.map((_, i) =>
-      ALL_ROUND.reduce((s, p) => s + (p.byInv[i] || 0), 0));
+
+    // r.pcs (built in buildData) is always tracked internally in pieces, regardless of
+    // what gets displayed — this is purely a display-time conversion, using the exact
+    // same math ctnOf already does for the "converted" footer row below. Cartons/RI/
+    // TOTAL PKGS totals stay computed from the internal pieces figure throughout, never
+    // from this display value, so mixing units on screen never mixes units in the math.
+    const displayQty = (pcs, col) => col.unit === 'PCS' ? pcs : ctnOf(pcs, col.qty);
 
     document.title = "Runsheet " + DATA.meta.sheet_no;
     document.getElementById("m-sheet").textContent = DATA.meta.sheet_no;
@@ -162,14 +197,14 @@ import { round2 } from './lib/round2.js';
     let h = `<thead>
       <tr class="group">
         <th colspan="7" style="background:var(--band)"></th>
-        <th colspan="${COLS.length}">ROUND ITEMS — QUANTITY IN PIECES</th>
+        <th colspan="${COLS.length}">ROUND ITEMS</th>
         <th colspan="3" style="background:var(--band)"></th>
       </tr>
       <tr>
         <th style="width:22px">S.N</th><th style="width:56px">Invoice</th><th style="width:48px">S.Order</th>
         <th>Customer Name</th><th style="width:60px">Taken By</th>
         <th style="width:50px">Cash $</th><th style="width:54px">Cheque $</th>`;
-    COLS.forEach(c => h += `<th style="width:38px">${c.code}<span class="pack">${c.pack}</span></th>`);
+    COLS.forEach(c => h += `<th style="width:38px">${c.code}<span class="pack">${c.pack} &middot; ${c.unit === 'PCS' ? 'Pcs' : 'Ctn'}</span></th>`);
     h += `<th style="width:40px">CTNS<span class="pack">box total</span></th>
           <th style="width:40px">RI<span class="pack">CTN</span></th>
           <th style="width:44px">TOTAL<span class="pack">PKGS</span></th></tr></thead><tbody>`;
@@ -187,7 +222,7 @@ import { round2 } from './lib/round2.js';
       h += `<tr><td>${i + 1}</td><td>${r.inv}</td><td>${r.so}</td>
         <td class="txt">${r.cust}</td><td class="by">${r.by}</td>
         <td class="num"></td><td class="num"></td>`;
-      r.pcs.forEach(p => h += cell(p));
+      r.pcs.forEach((p, j) => h += cell(displayQty(p, COLS[j])));
       h += cell(otherC) + cell(riC) + `<td class="tot-col">${round2(total)}</td></tr>`;
     });
 
@@ -195,9 +230,9 @@ import { round2 } from './lib/round2.js';
     const arCtnT = arCtnByInv.reduce((a, b) => a + b, 0);
     const riT = grandRoundCtn + arCtnT;
     h += `<tfoot>
-      <tr><td colspan="5" class="lbl">TOTAL ROUND — PIECES</td>
+      <tr><td colspan="5" class="lbl">TOTAL ROUND ITEMS</td>
           <td></td><td></td>
-          ${colPcs.map(p => `<td>${round2(p)}</td>`).join("")}
+          ${colPcs.map((p, j) => `<td>${round2(displayQty(p, COLS[j]))}</td>`).join("")}
           <td>${round2(otherT)}</td><td>${round2(riT)}</td><td class="tot-col">${round2(sheetTotal)}</td></tr>
       <tr class="ctn-row"><td colspan="7" class="lbl">CONVERTED — CARTONS / BAGS &nbsp;(pcs ÷ qty/ctn)</td>
           ${colPcs.map((p, j) => `<td>${round2(ctnOf(p, COLS[j].qty))}</td>`).join("")}
@@ -208,22 +243,23 @@ import { round2 } from './lib/round2.js';
     document.getElementById("chqTot").innerHTML = "$ ____________";
 
     /* ---- All Round Items distribution matrix ---- */
-    let a = `<thead><tr><th style="text-align:left">Product · pcs by invoice →</th>`;
+    let a = `<thead><tr><th style="text-align:left">Product</th><th style="width:38px">Unit</th>`;
     ROWS.forEach((r, i) => a += `<th class="inv"><span class="sn">${i + 1}·</span>${r.inv}</th>`);
-    a += `<th style="width:32px">PCS</th><th style="width:34px">Q/C</th><th style="width:32px">CTN</th></tr></thead><tbody>`;
+    a += `<th style="width:32px">QTY</th><th style="width:34px">Q/C</th><th style="width:32px">CTN</th></tr></thead><tbody>`;
 
-    let arPcsT = 0, arCtnRowT = 0;
+    let arCtnRowT = 0;
     ALL_ROUND.forEach(p => {
       const rowPcs = ROWS.reduce((s, _, i) => s + (p.byInv[i] || 0), 0);
       const rowCtn = ctnOf(rowPcs, p.qty);
-      arPcsT += rowPcs; arCtnRowT += rowCtn;
-      a += `<tr><td class="txt">${p.name}</td>`;
-      ROWS.forEach((_, i) => { const v = round2(p.byInv[i] || 0); a += `<td class="${v === 0 ? 'zero' : ''}">${v === 0 ? '·' : v}</td>`; });
-      a += `<td class="rt">${round2(rowPcs)}</td><td>${p.qty}</td><td class="rt">${round2(rowCtn)}</td></tr>`;
+      arCtnRowT += rowCtn;
+      a += `<tr><td class="txt">${p.name}<span class="pack"> &middot; ${p.packing === 'bag' ? 'Bag' : 'Carton'}</span></td>`;
+      a += `<td>${p.unit === 'PCS' ? 'Pcs' : (p.packing === 'bag' ? 'Bag' : 'Ctn')}</td>`;
+      ROWS.forEach((_, i) => { const v = round2(displayQty(p.byInv[i] || 0, p)); a += `<td class="${v === 0 ? 'zero' : ''}">${v === 0 ? '·' : v}</td>`; });
+      a += `<td class="rt">${round2(displayQty(rowPcs, p))}</td><td>${p.qty}</td><td class="rt">${round2(rowCtn)}</td></tr>`;
     });
-    a += `</tbody><tfoot><tr><td class="lbl">Pieces per shop (driver drops)</td>`;
-    ROWS.forEach((_, i) => a += `<td>${round2(arPcsByInv[i]) || "·"}</td>`);
-    a += `<td>${round2(arPcsT)}</td><td></td><td>${round2(arCtnRowT)}</td></tr></tfoot>`;
+    a += `</tbody><tfoot><tr><td colspan="2" class="lbl">Total per shop — cartons</td>`;
+    ROWS.forEach((_, i) => a += `<td>${round2(arCtnByInv[i]) || "·"}</td>`);
+    a += `<td></td><td></td><td class="rt">${round2(arCtnRowT)}</td></tr></tfoot>`;
     document.getElementById("allRound").innerHTML = a;
 
     /* ---- signatures ---- */

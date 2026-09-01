@@ -84,8 +84,14 @@ const routes = [
         <p class="hint">You're signed in, but no one's granted your account access to any page
         yet. Ask an admin to set your permissions in Users &amp; Permissions.</p>
       </div>` }, meta: { authedOnly: true } },
-  { path: '/builder', component: BuilderPage, name: 'builder', meta: { module: 'builder' } },
-  { path: '/builder/:id', component: BuilderPage, name: 'builder-edit', props: true, meta: { module: 'builder' } },
+  // A single route record with an optional :id — not two separate ones — is what lets
+  // Vue Router treat "new sheet just got its first auto-save and the URL updated" as an
+  // in-place param change rather than a navigation to a different route. Two separate
+  // records (even pointing at the same component) would make Vue fully unmount and
+  // remount BuilderPage the moment the URL changed, re-running mounted() and its fetches
+  // for no reason — visible as an unwanted flicker/reset a few seconds into a new sheet,
+  // right when the first auto-save fires.
+  { path: '/builder/:id?', component: BuilderPage, name: 'builder', props: true, meta: { module: 'builder' } },
   { path: '/products', component: ProductsPage, meta: { module: 'products' } },
   { path: '/customers', component: CustomersPage, meta: { module: 'customers' } },
   { path: '/settings', component: SettingsPage, meta: { module: 'settings' } },
@@ -153,7 +159,7 @@ const RootApp = {
         </div>
       </div>
       <div class="main">
-        <router-view :key="$route.fullPath" />
+        <router-view />
       </div>
     </template>
   `,

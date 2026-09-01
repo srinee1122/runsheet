@@ -317,7 +317,7 @@ app.post('/api/customers/import', requireModule('customers'), (req, res) => {
 });
 
 // =====================================================================
-// SETTINGS — frequent round-item columns (max 10), clerk name list
+// SETTINGS — frequent round-item columns (max 15), clerk name list
 // =====================================================================
 app.get('/api/settings/frequent-columns', requireAnyModule('builder', 'settings'), (req, res) => {
   res.json(getSetting('frequent_columns', []));
@@ -325,7 +325,7 @@ app.get('/api/settings/frequent-columns', requireAnyModule('builder', 'settings'
 
 app.put('/api/settings/frequent-columns', requireModule('settings'), (req, res) => {
   const cols = Array.isArray(req.body.columns) ? req.body.columns : [];
-  if (cols.length > 10) return res.status(400).json({ error: 'max 10 frequent columns' });
+  if (cols.length > 15) return res.status(400).json({ error: 'max 15 frequent columns' });
   setSetting('frequent_columns', cols);
   res.json({ ok: true });
 });
@@ -358,7 +358,7 @@ app.get('/api/runsheets/:id', requireAnyModule('builder', 'history'), (req, res)
 
 function validateRunsheetPayload(body) {
   const stops = body.data && Array.isArray(body.data.stops) ? body.data.stops : [];
-  if (stops.length > 20) return 'A runsheet can hold at most 20 invoices (one-page rule).';
+  if (stops.length > 25) return 'A runsheet can hold at most 25 invoices (one-page rule).';
   return null;
 }
 
@@ -379,11 +379,16 @@ app.post('/api/runsheets', requireModule('builder'), (req, res) => {
 // Optimistic concurrency: the client sends the version it loaded. If the row's current
 // version has since moved on (someone else saved in between), reject with 409 rather than
 // silently overwriting their save — no lock to go stale, just a conflict caught at save time.
+//
+// `explicit: true` in the payload (set by the Save button and by Print, which saves first;
+// never set by auto-save) snapshots the version being replaced into runsheet_versions
+// before overwriting it — see the table's own comment in db.js for why auto-save doesn't
+// trigger this too.
 app.put('/api/runsheets/:id', requireModule('builder'), (req, res) => {
   const b = req.body;
   const err = validateRunsheetPayload(b);
   if (err) return res.status(400).json({ error: err });
-  const current = db.prepare('SELECT version FROM runsheets WHERE id=?').get(req.params.id);
+  const current = db.prepare('SELECT * FROM runsheets WHERE id=?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'not found' });
   const expected = Number(b.version);
   if (!Number.isFinite(expected) || expected !== current.version) {
@@ -392,12 +397,36 @@ app.put('/api/runsheets/:id', requireModule('builder'), (req, res) => {
       current_version: current.version,
     });
   }
+  if (b.explicit) {
+    const savedBy = req.user.display_name || req.user.email || '';
+    db.prepare(`
+      INSERT INTO runsheet_versions (runsheet_id, version, sheet_no, area, delivery_man, vehicle_no, run_date, delivery_date, data, saved_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(current.id, current.version, current.sheet_no, current.area, current.delivery_man, current.vehicle_no, current.run_date, current.delivery_date, current.data, savedBy);
+  }
   const nextVersion = current.version + 1;
   db.prepare(`
     UPDATE runsheets SET sheet_no=?, area=?, delivery_man=?, vehicle_no=?, run_date=?, delivery_date=?, data=?, version=?, updated_at=datetime('now')
     WHERE id=?
   `).run(txt(b.sheet_no), txt(b.area), txt(b.delivery_man), txt(b.vehicle_no), txt(b.run_date), txt(b.delivery_date), JSON.stringify(b.data || {}), nextVersion, req.params.id);
   res.json({ ok: true, version: nextVersion });
+});
+
+// Lightweight list — no `data` (could be large) — newest first.
+app.get('/api/runsheets/:id/versions', requireAnyModule('builder', 'history'), (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, version, saved_by, saved_at FROM runsheet_versions WHERE runsheet_id=? ORDER BY id DESC'
+  ).all(req.params.id);
+  res.json(rows);
+});
+
+// Full content of one specific past snapshot — for viewing, or loading back into the
+// Builder as a starting point to restore (restoring is just loading this into the editor
+// and saving normally; there's no separate destructive "restore" action on the server).
+app.get('/api/runsheets/:id/versions/:versionId', requireAnyModule('builder', 'history'), (req, res) => {
+  const row = db.prepare('SELECT * FROM runsheet_versions WHERE id=? AND runsheet_id=?').get(req.params.versionId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json({ ...row, data: JSON.parse(row.data) });
 });
 
 // =====================================================================

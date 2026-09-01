@@ -49,6 +49,29 @@ CREATE TABLE IF NOT EXISTS runsheets (
   data TEXT NOT NULL -- JSON blob: { stops: [...], frequentColumns: [...] } snapshot at save time
 );
 
+-- A snapshot of a runsheet's full state, taken right before an EXPLICIT save (the Save
+-- button, or Print, which saves first) overwrites it — never on auto-save, which fires
+-- every ~2.5s while typing and would otherwise flood this with hundreds of near-identical
+-- entries per editing session. This is purely additive: the runsheets row above always
+-- holds the current state; this table only ever holds what came before it. No cap on how
+-- many accumulate — storage is cheap and this is low-traffic enough that pruning isn't a
+-- real concern yet.
+CREATE TABLE IF NOT EXISTS runsheet_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runsheet_id INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  sheet_no TEXT DEFAULT '',
+  area TEXT DEFAULT '',
+  delivery_man TEXT DEFAULT '',
+  vehicle_no TEXT DEFAULT '',
+  run_date TEXT DEFAULT '',
+  delivery_date TEXT DEFAULT '',
+  data TEXT NOT NULL,
+  saved_by TEXT DEFAULT '',
+  saved_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (runsheet_id) REFERENCES runsheets(id)
+);
+
 -- Identity comes from Firebase (uid/email/display_name are just a local cache of what
 -- Firebase told us at last login); permissions are entirely local to this app, since
 -- Firebase only handles "who is this person", not "what can they do here". The very
