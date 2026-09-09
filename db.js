@@ -16,15 +16,23 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'runsheet.db');
 
 const db = new DatabaseSync(DB_PATH);
-// Deliberately NOT using WAL journal mode. WAL splits committed writes across a separate
-// runsheet.db-wal file until a checkpoint merges them back into the main .db file — with
-// no checkpoint logic anywhere in this app, recent writes could sit in that separate file
-// indefinitely. On a hosting platform whose exact file-persistence guarantees across a
-// restart aren't fully verified, that's a real, concrete risk: the main .db file could
-// look intact while the actual latest data only ever lived in a file that didn't survive.
-// The default rollback journal keeps every committed write in the single .db file
-// immediately, with nothing left split out — worth far more here than WAL's concurrency
-// benefit, which matters far less for a handful of clerks than for a high-throughput system.
+// journal_mode is saved permanently inside the database file itself, not a per-connection
+// default — it is NOT enough to simply stop asserting WAL for a database that was already
+// switched to it by earlier code. An existing WAL-mode database stays in WAL mode forever
+// on every future connection unless something explicitly switches it away. This line does
+// that: PRAGMA journal_mode = DELETE actively triggers a checkpoint first (merging any
+// writes still sitting in the separate -wal file into the main .db file), then removes the
+// -wal/-shm files entirely. On a fresh database that was never in WAL mode, this is a no-op.
+//
+// WAL splits committed writes across that separate runsheet.db-wal file until a checkpoint
+// merges them back — with no checkpoint logic anywhere else in this app, recent writes
+// could sit in that separate file indefinitely. On a hosting platform whose exact file-
+// persistence guarantees across a restart aren't fully verified, that's a real, concrete
+// risk: the main .db file could look intact while the actual latest data only ever lived
+// in a file that didn't survive. Keeping every committed write in the single .db file is
+// worth far more here than WAL's concurrency benefit, which matters far less for a handful
+// of clerks than for a high-throughput system.
+db.exec('PRAGMA journal_mode = DELETE;');
 db.exec('PRAGMA foreign_keys = ON;');
 
 db.exec(`
