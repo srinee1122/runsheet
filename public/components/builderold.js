@@ -133,7 +133,6 @@ export default {
       // background auto-save (draft protection) — see scheduleAutoSave/autoSave below
       readyForAutoSave: false, // guards against the initial data load itself counting as an edit
       autoSaveTimer: null,
-      autoSavePending: false, // true only between scheduleAutoSave() arming a timer and that change actually getting saved — lets a switch/unmount know whether there's really something to flush, not just whether a timer was EVER scheduled
       autoSaving: false,
       lastAutoSavedAt: null,
       autoSaveConflict: false, // someone else saved this sheet; paused until a manual Save resolves it
@@ -175,8 +174,6 @@ export default {
       // _uid values, which forces Vue to destroy and recreate every stop's DOM elements.
       // That's the flicker. String() on both sides is what actually makes this work.
       if (String(newId || '') === String(this.runsheetId || '')) return;
-      clearTimeout(this.autoSaveTimer);
-      if (this.autoSavePending && this.readyForAutoSave && !this.autoSaveConflict) await this.autoSave({ skipRouterUpdate: true });
       this.readyForAutoSave = false; // the reset below shouldn't itself count as an edit
       await this.loadSheet(newId);
       this.$nextTick(() => { this.readyForAutoSave = true; });
@@ -196,7 +193,6 @@ export default {
   beforeUnmount() {
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     clearTimeout(this.autoSaveTimer);
-    if (this.autoSavePending && this.readyForAutoSave && !this.autoSaveConflict) this.autoSave({ skipRouterUpdate: true });
   },
   methods: {
     // Loads an existing sheet's content, or resets to a blank new-sheet state when id
@@ -289,8 +285,6 @@ export default {
         this.lastAutoSavedAt = new Date();
         this.autoSaveConflict = false;
         this.viewingVersion = null;
-        clearTimeout(this.autoSaveTimer);
-        this.autoSavePending = false;
       } catch (e) {
         ok = false;
         if (e.status === 409) {
@@ -353,10 +347,9 @@ export default {
     scheduleAutoSave() {
       if (!this.readyForAutoSave || this.autoSaveConflict) return;
       clearTimeout(this.autoSaveTimer);
-      this.autoSavePending = true;
       this.autoSaveTimer = setTimeout(() => this.autoSave(), 2500);
     },
-    async autoSave(opts = {}) {
+    async autoSave() {
       if (this.saving || this.autoSaving) return; // don't overlap with a manual save, or with itself
       if (this.stops.length > 25) return; // the person will hit this via a manual Save/Print anyway; stay quiet here
       this.autoSaving = true;
@@ -375,10 +368,9 @@ export default {
           const r = await Api.post('/api/runsheets', payload);
           this.runsheetId = r.id;
           this.version = r.version;
-          if (!opts.skipRouterUpdate) this.$router.replace(`/builder/${r.id}`);
+          this.$router.replace(`/builder/${r.id}`);
         }
         this.lastAutoSavedAt = new Date();
-        this.autoSavePending = false;
       } catch (e) {
         // A 409 here means someone else saved this sheet since we last synced. Don't
         // silently overwrite their work, and don't interrupt with a dialog mid-typing
@@ -396,7 +388,7 @@ export default {
     handleVisibilityChange() {
       if (document.visibilityState === 'hidden') {
         clearTimeout(this.autoSaveTimer);
-        if (this.autoSavePending && this.readyForAutoSave && !this.autoSaveConflict) this.autoSave();
+        if (this.readyForAutoSave && !this.autoSaveConflict) this.autoSave();
       }
     },
     // Always saves first — the print page reads the saved runsheet from the database, not

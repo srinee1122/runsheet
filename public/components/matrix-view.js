@@ -7,10 +7,11 @@
 // `stops` array the List view uses (mutated in place), so switching views never loses
 // anything.
 import ProductPicker from './product-picker.js';
+import CustomerPicker from './customer-picker.js';
 import { round2 } from '../lib/round2.js';
 
 export default {
-  components: { ProductPicker },
+  components: { ProductPicker, CustomerPicker },
   props: {
     stops: { type: Array, required: true },
     products: { type: Array, required: true },
@@ -77,7 +78,7 @@ export default {
     // — a graceful fallback for extreme cases (many preset columns on a narrow window),
     // not what happens in ordinary use.
     mainTableMinWidth() {
-      const fixed = 24 + 62 + 56 + 100 + 66 + 74 + 42 + 42 + 42 + 42 + 46 + 62; // metadata + CTNS + RI + Total + Actions
+      const fixed = 24 + 62 + 56 + 200 + 66 + 74 + 28 + 28 + 28 + 28 + 36 + 62; // metadata + CTNS + RI + Total + Actions
       const presetCount = Math.max(this.columns.length, 1);
       return fixed + presetCount * 50;
     },
@@ -537,17 +538,17 @@ export default {
         </tr>
         <tr>
           <th style="width:24px;">S.N</th><th style="width:62px;">Invoice</th><th style="width:56px;">S.Order</th>
-          <th style="width:100px;">Customer</th><th style="width:66px;">Taken By</th>
-          <th class="mx-col-prepicked" style="width:42px;">Carton</th>
-          <th class="mx-col-prepicked" style="width:42px;">Bag</th>
+          <th style="width:200px;">Customer</th><th style="width:66px;">Taken By</th>
+          <th class="mx-col-prepicked" style="width:28px;">Carton</th>
+          <th class="mx-col-prepicked" style="width:28px;">Bag</th>
           <th style="width:74px;">Note</th>
           <th v-for="c in columns" :key="c.product_id">
             {{ c.code }}<span class="mx-pack">{{ c.unit==='PCS' ? 'pcs' : 'ctn' }} &middot; &times;{{ c.qty }}/ctn</span>
           </th>
           <th v-if="!columns.length">&mdash;</th>
-          <th class="mx-col-ri" style="width:42px;">Carton</th>
-          <th class="mx-col-ri" style="width:42px;">Bag</th>
-          <th style="width:46px;">TOTAL<span class="mx-pack">PKGS</span></th>
+          <th class="mx-col-ri" style="width:28px;">Carton</th>
+          <th class="mx-col-ri" style="width:28px;">Bag</th>
+          <th style="width:36px;">TOTAL<span class="mx-pack">PKGS</span></th>
           <th style="width:62px;"></th>
         </tr>
       </thead>
@@ -562,7 +563,7 @@ export default {
           <td><input type="text" class="mx-invoice-field" v-model="stop.invoice_no" @input="stop._invoiceNeedsInput=false" @keydown="handleKeyNav($event)"
               :style="stop._invoiceNeedsInput && !stop.invoice_no ? 'border-color:var(--bad);background:var(--bad-soft)' : ''" /></td>
           <td><input type="text" class="mx-focus-start" v-model="stop.so_no" @keydown="handleKeyNav($event)" /></td>
-          <td><input type="text" v-model="stop.customer" list="mx-customer-list" @keydown="handleKeyNav($event)" /></td>
+          <td><CustomerPicker :customers="customers" v-model="stop.customer" @keydown="handleKeyNav($event)" /></td>
           <td><input type="text" v-model="stop.taken_by" @keydown="handleKeyNav($event)" /></td>
           <td><input type="number" min="0" step="1" v-model.number="stop.ctns_carton" @keydown="handleKeyNav($event)" /></td>
           <td><input type="number" min="0" step="1" v-model.number="stop.ctns_bag" @keydown="handleKeyNav($event)" /></td>
@@ -599,10 +600,6 @@ export default {
     <div style="margin:10px 0;">
       <button @click="$emit('add-stop')" :disabled="atLimit">+ Add stop</button>
     </div>
-
-    <datalist id="mx-customer-list">
-      <option v-for="c in customers" :key="c.id" :value="c.name" />
-    </datalist>
 
     <div class="empty" v-if="!stops.length">No stops yet &mdash; click "+ Add stop" above.</div>
 
