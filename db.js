@@ -6,12 +6,25 @@ const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// GoDaddy Node.js Hosting only guarantees files under public/assets/ survive a
+// redeploy — everywhere else on disk (including the project root's own data/ folder,
+// where this used to live) gets reset each time. This directory itself is NOT web-
+// accessible despite living under public/ — server.js explicitly blocks any request
+// for it before express.static ever gets a chance to serve it (see the comment there).
+const DATA_DIR = path.join(__dirname, 'public', 'assets', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'runsheet.db');
 
 const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL;'); // safe concurrent readers/writers across clerks
+// Deliberately NOT using WAL journal mode. WAL splits committed writes across a separate
+// runsheet.db-wal file until a checkpoint merges them back into the main .db file — with
+// no checkpoint logic anywhere in this app, recent writes could sit in that separate file
+// indefinitely. On a hosting platform whose exact file-persistence guarantees across a
+// restart aren't fully verified, that's a real, concrete risk: the main .db file could
+// look intact while the actual latest data only ever lived in a file that didn't survive.
+// The default rollback journal keeps every committed write in the single .db file
+// immediately, with nothing left split out — worth far more here than WAL's concurrency
+// benefit, which matters far less for a handful of clerks than for a high-throughput system.
 db.exec('PRAGMA foreign_keys = ON;');
 
 db.exec(`
@@ -49,11 +62,12 @@ CREATE TABLE IF NOT EXISTS runsheets (
   data TEXT NOT NULL -- JSON blob: { stops: [...], frequentColumns: [...] } snapshot at save time
 );
 
--- A snapshot of a runsheet's full state, taken right before an EXPLICIT save (the Save
--- button, or Print, which saves first) overwrites it — never on auto-save, which fires
--- every ~2.5s while typing and would otherwise flood this with hundreds of near-identical
--- entries per editing session. This is purely additive: the runsheets row above always
--- holds the current state; this table only ever holds what came before it. No cap on how
+-- A snapshot of a runsheet's full state, taken right after an EXPLICIT save (the Save
+-- button, or Print, which saves first) applies — so each entry is exactly what was just
+-- saved, not the state it replaced. Never on auto-save, which fires every ~2.5s while
+-- typing and would otherwise flood this with hundreds of near-identical entries per
+-- editing session. This is purely additive: the runsheets row above always holds the
+-- current state; this table holds every past explicit save alongside it. No cap on how
 -- many accumulate — storage is cheap and this is low-traffic enough that pruning isn't a
 -- real concern yet.
 CREATE TABLE IF NOT EXISTS runsheet_versions (

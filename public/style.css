@@ -203,13 +203,6 @@ tr:hover td{background:#fafbfd;}
   text-transform:uppercase;letter-spacing:.03em;}
 .mx-allround th:nth-child(1),.mx-allround td.mx-rowlabel{width:140px;
   position:sticky;left:0;background:#fff;z-index:2;text-align:left;font-size:11px;font-weight:500;}
-/* A child's z-index is only ever meaningful within its own parent's stacking context —
-   the dropdown's own z-index (see .mx-cust-picker/.mx-cust-dropdown below) can't let it
-   visually escape above sibling table cells (like the footer row) while it's nested
-   inside this sticky, z-index:2 cell, no matter how high that child's own z-index is.
-   Elevating the cell itself, but only while it actually contains an open dropdown, fixes
-   that without changing this column's normal sticky z-index:2 the rest of the time. */
-.mx-allround td.mx-rowlabel:has(.mx-cust-dropdown){z-index:50;}
 .mx-allround th:nth-child(2),.mx-allround td.mx-unit-cell{width:46px;
   position:sticky;left:140px;background:#fff;z-index:2;text-align:center;}
 .mx-inv-head{vertical-align:bottom;padding:4px 1px;position:relative;}
@@ -283,16 +276,14 @@ tr:hover td{background:#fafbfd;}
 .pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft);}
 .pagination button:disabled{opacity:.4;cursor:default;}
 
-.mx-cust-picker{position:relative;z-index:40;}
 .mx-cust-picker input{width:100%;min-width:0;}
 .mx-cust-dropdown{
-  position:absolute;top:100%;left:0;z-index:35;
+  z-index:1000;
   background:#fff;border:1px solid var(--line);border-radius:6px;
   box-shadow:0 6px 18px rgba(0,0,0,.15);
   list-style:none;margin:2px 0 0;padding:2px;
   min-width:180px;max-width:280px;max-height:200px;overflow-y:auto;
 }
-.mx-cust-dropdown-up{top:auto;bottom:100%;margin:0 0 2px;}
 .mx-cust-dropdown li{padding:4px 8px;font-size:11px;border-radius:4px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .mx-cust-dropdown li.active{background:var(--accent-soft);color:var(--accent);font-weight:600;}
 .mx-cust-dropdown li:hover{background:var(--line-soft);}

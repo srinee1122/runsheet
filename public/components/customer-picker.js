@@ -12,7 +12,7 @@ export default {
   },
   emits: ['update:modelValue'],
   data() {
-    return { query: this.modelValue || '', open: false, highlighted: 0, dropUp: false };
+    return { query: this.modelValue || '', open: false, highlighted: 0, dropStyle: {} };
   },
   watch: {
     // Keeps this in sync if the stop's customer is changed from outside this component
@@ -31,25 +31,33 @@ export default {
     },
   },
   methods: {
-    // Decides whether the dropdown should open downward (the default) or upward, based on
-    // actual remaining space in the viewport — the "Add product"/last-row fields in a long
-    // table regularly sit close enough to the bottom of the visible page that a downward
-    // list would run past the edge and effectively be cut off. Only flips up when there's
-    // genuinely more room that way too, rather than trading one cramped position for
-    // another equally cramped one.
-    updateDropDirection() {
+    // Positions the dropdown with position:fixed, coordinates computed directly from the
+    // input's real on-screen location, rather than position:absolute anchored to a
+    // positioned ancestor. This app has more than one scrollable/clipping container
+    // between this field and the page root (the All Round Items table's own sticky
+    // columns, the outer page wrapper's overflow for the wide table) — position:fixed
+    // is the one approach that's genuinely immune to all of that at once, since a
+    // fixed-position element escapes every ancestor's stacking context and overflow
+    // clipping and renders directly against the viewport, rather than needing each
+    // clipping/stacking ancestor found and individually special-cased. Also decides
+    // up vs down the same way as before: only flips upward when there's genuinely more
+    // room that way, rather than trading one cramped position for another.
+    updateDropPosition() {
       const el = this.$refs.input;
       if (!el) return;
       const rect = el.getBoundingClientRect();
       const estimatedHeight = 200; // matches the dropdown's own max-height in CSS
       const spaceBelow = window.innerHeight - rect.bottom;
-      this.dropUp = spaceBelow < estimatedHeight && rect.top > spaceBelow;
+      const openUp = spaceBelow < estimatedHeight && rect.top > spaceBelow;
+      this.dropStyle = openUp
+        ? { position: 'fixed', left: rect.left + 'px', bottom: (window.innerHeight - rect.top) + 'px', top: 'auto', minWidth: rect.width + 'px' }
+        : { position: 'fixed', left: rect.left + 'px', top: rect.bottom + 'px', bottom: 'auto', minWidth: rect.width + 'px' };
     },
     onInput() {
       this.$emit('update:modelValue', this.query);
       this.open = this.suggestions.length > 0;
       this.highlighted = 0;
-      if (this.open) this.updateDropDirection();
+      if (this.open) this.updateDropPosition();
     },
     select(name) {
       this.query = name;
@@ -85,13 +93,13 @@ export default {
     onBlur() { setTimeout(() => { this.open = false; }, 150); },
     onFocus() {
       this.open = this.suggestions.length > 0;
-      if (this.open) this.updateDropDirection();
+      if (this.open) this.updateDropPosition();
     },
   },
   template: `
   <div class="mx-cust-picker">
     <input ref="input" type="text" v-model="query" @input="onInput" @keydown="onKeydown" @blur="onBlur" @focus="onFocus" />
-    <ul class="mx-cust-dropdown" :class="{ 'mx-cust-dropdown-up': dropUp }" v-if="open && suggestions.length">
+    <ul class="mx-cust-dropdown" :style="dropStyle" v-if="open && suggestions.length">
       <li v-for="(c, i) in suggestions" :key="c.id" :class="{ active: i === highlighted }" @mousedown.prevent="select(c.name)">{{ c.name }}</li>
     </ul>
   </div>

@@ -20,6 +20,13 @@ console.log('[env check] BOOTSTRAP_ADMIN_EMAIL:', process.env.BOOTSTRAP_ADMIN_EM
 console.log('[env check] FIREBASE_SERVICE_ACCOUNT_JSON:', process.env.FIREBASE_SERVICE_ACCOUNT_JSON ? `present (${process.env.FIREBASE_SERVICE_ACCOUNT_JSON.length} chars)` : 'NOT SET');
 
 app.use(express.json({ limit: '5mb' }));
+// Must come before express.static below — public/assets/data holds the live SQLite
+// database, moved there specifically because it's the one location GoDaddy Node.js
+// Hosting persists across redeploys (everywhere else on disk gets reset). Everything
+// else under public/ is intentionally served to anyone with no authentication, so this
+// has to explicitly deny the one subfolder that isn't meant to be public despite living
+// under a folder named public.
+app.use('/assets/data', (req, res) => res.status(404).end());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Every /api/* route requires a valid Firebase ID token from here on — the login page
@@ -381,9 +388,12 @@ app.post('/api/runsheets', requireModule('builder'), (req, res) => {
 // silently overwriting their save — no lock to go stale, just a conflict caught at save time.
 //
 // `explicit: true` in the payload (set by the Save button and by Print, which saves first;
-// never set by auto-save) snapshots the version being replaced into runsheet_versions
-// before overwriting it — see the table's own comment in db.js for why auto-save doesn't
-// trigger this too.
+// never set by auto-save) snapshots into runsheet_versions AFTER applying the new save —
+// so the snapshot is exactly what was just saved, not the state it replaced. Snapshotting
+// the pre-save state instead (the previous behavior here) meant the content you just saved
+// was never itself visible in version history until a later save pushed it there, always
+// one step behind. See the table's own comment in db.js for why auto-save doesn't trigger
+// a snapshot at all.
 app.put('/api/runsheets/:id', requireModule('builder'), (req, res) => {
   const b = req.body;
   const err = validateRunsheetPayload(b);
@@ -397,18 +407,18 @@ app.put('/api/runsheets/:id', requireModule('builder'), (req, res) => {
       current_version: current.version,
     });
   }
-  if (b.explicit) {
-    const savedBy = req.user.display_name || req.user.email || '';
-    db.prepare(`
-      INSERT INTO runsheet_versions (runsheet_id, version, sheet_no, area, delivery_man, vehicle_no, run_date, delivery_date, data, saved_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(current.id, current.version, current.sheet_no, current.area, current.delivery_man, current.vehicle_no, current.run_date, current.delivery_date, current.data, savedBy);
-  }
   const nextVersion = current.version + 1;
   db.prepare(`
     UPDATE runsheets SET sheet_no=?, area=?, delivery_man=?, vehicle_no=?, run_date=?, delivery_date=?, data=?, version=?, updated_at=datetime('now')
     WHERE id=?
   `).run(txt(b.sheet_no), txt(b.area), txt(b.delivery_man), txt(b.vehicle_no), txt(b.run_date), txt(b.delivery_date), JSON.stringify(b.data || {}), nextVersion, req.params.id);
+  if (b.explicit) {
+    const savedBy = req.user.display_name || req.user.email || '';
+    db.prepare(`
+      INSERT INTO runsheet_versions (runsheet_id, version, sheet_no, area, delivery_man, vehicle_no, run_date, delivery_date, data, saved_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(req.params.id, nextVersion, txt(b.sheet_no), txt(b.area), txt(b.delivery_man), txt(b.vehicle_no), txt(b.run_date), txt(b.delivery_date), JSON.stringify(b.data || {}), savedBy);
+  }
   res.json({ ok: true, version: nextVersion });
 });
 
