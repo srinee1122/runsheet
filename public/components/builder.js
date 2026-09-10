@@ -2,6 +2,7 @@
 import { Api } from '../lib/api.js';
 import { round2 } from '../lib/round2.js';
 import { formatDateTime } from '../lib/formatDate.js';
+import { downloadRunsheetExcel } from '../lib/excel-export.js';
 import PhotoReviewPanel from './photo-review.js';
 import MatrixView from './matrix-view.js';
 
@@ -125,6 +126,7 @@ export default {
       customers: [],
       frequentColumns: [],
       saving: false,
+      excelDownloading: false,
       saveMsg: '',
       // photo flow
       photoProgress: null, // { done, total }
@@ -407,6 +409,20 @@ export default {
       if (!ok || !this.runsheetId) return;
       window.open(`/print.html?id=${this.runsheetId}`, '_blank');
     },
+    // Same reasoning as print() above — the export reads the saved runsheet from the
+    // database, so it needs a save first too, or it would silently export stale data.
+    async downloadExcel() {
+      const ok = await this.save();
+      if (!ok || !this.runsheetId) return;
+      this.excelDownloading = true;
+      try {
+        await downloadRunsheetExcel(this.runsheetId);
+      } catch (e) {
+        alert('Could not generate the Excel file: ' + e.message);
+      } finally {
+        this.excelDownloading = false;
+      }
+    },
 
     // ---------------- photo flow ----------------
     triggerPhotoInput() { this.$refs.photoInput.click(); },
@@ -469,6 +485,7 @@ export default {
       <button @click="addStop" :disabled="atLimit">+ Add stop</button>
       <button class="primary" @click="save" :disabled="saving">{{ saving ? 'Saving…' : 'Save' }}</button>
       <button @click="print" :disabled="saving">🖨️ Print</button>
+      <button @click="downloadExcel" :disabled="saving || excelDownloading">{{ excelDownloading ? 'Preparing…' : '📊 Excel' }}</button>
       <button v-if="runsheetId" @click="openVersionHistory">Version History</button>
       <span class="hint" v-if="saveMsg">{{ saveMsg }}</span>
     </div>

@@ -3,11 +3,9 @@ node_modules/
 
 # SQLite database and its WAL/SHM files — real runsheet/product/customer data,
 # never committed. data/.gitkeep keeps the empty directory tracked.
-#data/*.db
-#data/*.db-shm
-#data/*.db-wal
-#*.db-shm
-#*.db-wal
+public/assets/data/*.db
+public/assets/data/*.db-shm
+public/assets/data/*.db-wal
 
 # Environment / secrets
 .env
