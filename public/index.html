@@ -21,6 +21,12 @@
 <!-- SheetJS — parses .xlsx/.xls entirely in the browser so the real Item/Customer Master
      files can be uploaded directly, no server-side conversion needed. -->
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- ExcelJS — separate library, used only for the Runsheet Builder's Excel export. SheetJS
+     (above) can read spreadsheets but its free tier cannot WRITE cell styling (borders,
+     fonts, fills) or print page setup — confirmed directly by inspecting its output, not
+     assumed. ExcelJS writes real styling, which the Excel export needs since it's meant to
+     print like the runsheet itself if the app is ever unavailable, not just hold raw data. -->
+<script src="https://unpkg.com/exceljs@4.4.0/dist/exceljs.min.js"></script>
 </head>
 <body>
 <div id="app"></div>
