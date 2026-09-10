@@ -54,6 +54,7 @@ export function buildRunsheetWorkbook(DATA) {
   let r = 1;
   r = writeHeader(ws, DATA, r);
   r += 1;
+  const mainHeaderRow = r + 1; // writeMainTable's group-header band comes first, then the column-header row
   r = writeMainTable(ws, DATA, r);
   r += 1;
   if (DATA.all_round.length) {
@@ -61,6 +62,16 @@ export function buildRunsheetWorkbook(DATA) {
     r += 1;
   }
   r = writeSignaturesAndSummary(ws, DATA, r);
+
+  // Freeze panes: keeps the column-header row visible on screen while scrolling through a
+  // long list of invoices, exactly like the header row of a normal table would.
+  ws.views = [{ state: 'frozen', ySplit: mainHeaderRow, xSplit: 0 }];
+  // Print titles: repeats that same header row at the top of every printed page. Without
+  // this, a runsheet with enough invoices to spill onto a second printed page would show
+  // page 2 as a block of numbers with no column labels at all -- exactly the kind of thing
+  // that defeats a document meant to be read and acted on while printed.
+  ws.pageSetup.printTitlesRow = `${mainHeaderRow}:${mainHeaderRow}`;
+
   return wb;
 }
 
